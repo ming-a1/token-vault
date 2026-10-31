@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "令牌库",
+    "description": "在设置里本机保存 Git 令牌和其他 API 令牌。会话用 {{token:NAME}} 占位符引用，永远看不到令牌值。"
+  }
+}

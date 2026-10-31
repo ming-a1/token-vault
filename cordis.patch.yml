@@ -1,0 +1,4 @@
+- insert:
+    - id: token-vault
+      name: '@local/token-vault'
+      config: {}
