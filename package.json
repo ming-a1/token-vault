@@ -1,6 +1,6 @@
 {
   "name": "@local/token-vault",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Local token vault: store Git and other API tokens, use them from any session through placeholders without the value entering the session.",

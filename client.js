@@ -20,13 +20,13 @@ window.__ModuleLoader__.load({
     const SAVE_ROUTE = 'token-vault/save'
     const DELETE_ROUTE = 'token-vault/delete'
     const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/
-    const PLACEHOLDER_EXAMPLE = 'git clone https://oauth2:{{token:GITHUB_TOKEN}}@github.com/org/repo.git'
+    const SHELL_EXAMPLE = 'vault_sh: curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user'
 
     const DICTIONARIES = {
       en: {
         nav: 'Token vault',
         lead:
-          'Tokens live in a local file on this machine and never appear in a session: other sessions reference one with a placeholder, and tool output is scrubbed back to it.',
+          'Tokens live in a local file on this machine and never appear in a session: the vault exports one into a command\'s environment, and tool output is scrubbed if a command echoes it.',
         'field.name': 'Name',
         'field.namePlaceholder': 'e.g. GITHUB_TOKEN',
         'field.value': 'Token value',
@@ -39,7 +39,7 @@ window.__ModuleLoader__.load({
         'action.saving': 'Saving…',
         'action.saveChanges': 'Save',
         'action.cancel': 'Cancel',
-        'action.copyPlaceholder': 'Copy placeholder',
+        'action.copyVariable': 'Copy $NAME',
         'action.copied': 'Copied',
         'action.replace': 'Replace value',
         'action.delete': 'Delete',
@@ -50,8 +50,8 @@ window.__ModuleLoader__.load({
         'list.empty': 'No tokens yet — add one above.',
         'row.hidden': '•••••••• · {count} characters',
         'usage.line':
-          'Use a token from any session by writing its placeholder where the value belongs; it is replaced right before the tool runs.',
-        'usage.example': PLACEHOLDER_EXAMPLE,
+          'Any session runs a command needing a token with the vault_sh tool; the token is exported into that command\'s environment, so only $NAME appears in the session.',
+        'usage.example': SHELL_EXAMPLE,
         'error.nameRequired': 'Enter a name.',
         'error.nameInvalid': 'Start with a letter or underscore; then letters, digits, dot, dash or underscore.',
         'error.valueRequired': 'Enter the token value.',
@@ -63,7 +63,7 @@ window.__ModuleLoader__.load({
       zh: {
         nav: '令牌库',
         lead:
-          '令牌保存在本机文件里，不会出现在会话中：其他会话用占位符引用它，工具输出里的令牌也会被自动替换回占位符。',
+          '令牌保存在本机文件里，不会出现在会话中：vault_sh 把令牌注入命令的环境变量，命令回显出的令牌也会被自动隐藏。',
         'field.name': '名称',
         'field.namePlaceholder': '例如 GITHUB_TOKEN',
         'field.value': '令牌值',
@@ -76,7 +76,7 @@ window.__ModuleLoader__.load({
         'action.saving': '保存中…',
         'action.saveChanges': '保存',
         'action.cancel': '取消',
-        'action.copyPlaceholder': '复制占位符',
+        'action.copyVariable': '复制 $NAME',
         'action.copied': '已复制',
         'action.replace': '替换值',
         'action.delete': '删除',
@@ -86,8 +86,8 @@ window.__ModuleLoader__.load({
         'list.loading': '加载中…',
         'list.empty': '还没有令牌，在上面的表单里添加一个。',
         'row.hidden': '•••••••• · {count} 个字符',
-        'usage.line': '在任意会话里用占位符代替令牌值，工具执行前会自动替换，令牌不会进入会话。',
-        'usage.example': PLACEHOLDER_EXAMPLE,
+        'usage.line': '任意会话用 vault_sh 跑命令即可用到令牌：令牌被注入该命令的环境变量，会话里只会出现 $NAME。',
+        'usage.example': SHELL_EXAMPLE,
         'error.nameRequired': '请填写名称。',
         'error.nameInvalid': '请以字母或下划线开头，只能包含字母、数字、点、横线或下划线。',
         'error.valueRequired': '请填写令牌值。',
@@ -117,6 +117,7 @@ window.__ModuleLoader__.load({
 .tv-row{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border:.5px solid var(--dsw-alias-settings-card-stroke,var(--dsw-alias-border-l1));border-radius:12px;background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-1))}
 .tv-rowMain{display:flex;align-items:center;gap:10px;min-width:0}
 .tv-name{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-module-platform,transparent);border-radius:6px;padding:1px 6px;overflow-wrap:anywhere}
+.tv-env{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border-radius:6px;padding:1px 6px;white-space:nowrap}
 .tv-masked{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;white-space:nowrap}
 .tv-when{margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .tv-note{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;overflow-wrap:anywhere}
@@ -204,6 +205,7 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'tv-rowMain' },
           h('code', { className: 'tv-name' }, token.name),
+          token.env === undefined ? null : h('code', { className: 'tv-env' }, `$${token.env}`),
           h('span', { className: 'tv-masked' }, t('row.hidden', { count: token.length })),
           when === '' ? null : h('span', { className: 'tv-when' }, when),
         ),
@@ -242,8 +244,8 @@ window.__ModuleLoader__.load({
               { className: 'tv-actions' },
               h(
                 'button',
-                { type: 'button', className: 'tv-link', onClick: () => props.onCopy(token.name) },
-                props.copied === token.name ? t('action.copied') : t('action.copyPlaceholder'),
+                { type: 'button', className: 'tv-link', onClick: () => props.onCopy(token) },
+                props.copied === token.name ? t('action.copied') : t('action.copyVariable'),
               ),
               h('button', { type: 'button', className: 'tv-link', onClick: () => props.onEdit(token) }, t('action.replace')),
               h(
@@ -355,10 +357,10 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const copyPlaceholder = async (name) => {
+      const copyVariable = async (token) => {
         try {
-          await navigator.clipboard.writeText(`{{token:${name}}}`)
-          setCopied(name)
+          await navigator.clipboard.writeText(`$${token.env ?? token.name}`)
+          setCopied(token.name)
         } catch {
           setError(t('error.copyFailed'))
         }
@@ -425,7 +427,7 @@ window.__ModuleLoader__.load({
                     copied,
                     busy,
                     formatWhen,
-                    onCopy: copyPlaceholder,
+                    onCopy: copyVariable,
                     onEdit: (target) => {
                       setPendingDelete('')
                       setEditing({ name: target.name, value: '', note: target.note })

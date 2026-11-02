@@ -1,35 +1,41 @@
 /**
  * Token vault — the Host half.
  *
- * A small local store for Git and other API tokens, plus the two mechanisms
- * that let any Session use one without the value ever entering the Session:
+ * A small local store for Git and other API tokens, plus the one mechanism that
+ * lets any Session use a token without the value entering the Session: the
+ * `vault_sh` tool runs a command with the stored tokens exported as environment
+ * variables. The command text names only the variable (`$GITHUB_TOKEN`), so the
+ * value never reaches arguments, the durable session log, a job record, or a
+ * receipt.
  *
- * 1. `{{token:NAME}}` placeholders inside a tool call's arguments are replaced
- *    with the stored value immediately before the tool is dispatched
- *    (`tools/execute`), so the durable log keeps the placeholder only.
- * 2. Every text block of a tool result is scrubbed back to its placeholder
- *    (`tools/post-execute`), so a command that echoes a token cannot leak it.
+ * Tool results are additionally scrubbed (`tools/post-execute`): if a command
+ * echoes a variable, the value in the output is replaced by {{token:NAME}}.
+ *
+ * Placeholders are NOT substituted into tool arguments. That design leaked: the
+ * jobs registry stores the dispatched command as a job label, so the substituted
+ * value landed in a durable `job/registered` event and came back through job
+ * receipts. `tools/pre-execute` now refuses placeholder references outright.
  *
  * The value itself is never returned by any route or tool: the panel reads
- * names, notes and value lengths; the agent tool reads names and notes.
+ * names, notes and value lengths; the agent tools read names and notes.
  *
  * @module @local/token-vault
  */
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, sep } from 'node:path'
 
 /** Cordis plugin name. */
 export const name = 'token-vault'
 
-/** The route carrier, its trust fence, the tool registry and the prompt. */
-export const inject = ['webServer', 'connection', 'tools', 'systemPrompt']
+/** The trust fence, the tool registry, the prompt, and the shell this plugin runs commands through. */
+export const inject = ['webServer', 'connection', 'tools', 'systemPrompt', 'shell', 'workingDirectory', 'shellEnv']
 
 /** Accepted token names: a shell-friendly identifier. */
 const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/
 
-/** One `{{token:NAME}}` placeholder occurrence. */
+/** One `{{token:NAME}}` placeholder occurrence (refused in the tools that execute a string). */
 const PLACEHOLDER_PATTERN = /\{\{\s*token\s*:\s*([A-Za-z_][A-Za-z0-9_.-]{0,63})\s*\}\}/g
 
 /** Longest accepted token value. */
@@ -45,17 +51,19 @@ const MAX_BODY_BYTES = 64 * 1024
 const MIN_SCRUB_LENGTH = 8
 
 /**
- * Tools whose arguments are document text rather than something that executes.
- * They keep `{{token:…}}` literally: documentation, templates and changelogs
- * must be able to spell the syntax, and writing a real secret into a file is a
- * decision the user makes in the panel, not a side effect of a placeholder.
+ * Tools that execute a caller-supplied string. Only these refuse a placeholder
+ * reference: everywhere else the text is inert (a prompt, a document), and
+ * denying it would break documentation and hand-offs between agents.
  */
-const CONTENT_TOOLS = new Set(['write', 'edit'])
+const PLACEHOLDER_GUARDED = new Set(['bash', 'run_code'])
 
 /** Route paths served to the panel (the browser addresses them document-relative). */
 const LIST_PATH = '/token-vault/list'
 const SAVE_PATH = '/token-vault/save'
 const DELETE_PATH = '/token-vault/delete'
+
+/** The shell tool: the only way a token reaches a command. */
+const SHELL_TOOL_NAME = 'vault_sh'
 
 /**
  * The vault file this profile uses unless the row's `config.file` overrides it.
@@ -238,21 +246,17 @@ class TokenVault {
   }
 
   /**
-   * Collect the placeholder names one argument tree references that the vault
-   * does not hold, so the call can be refused before it runs with a literal
-   * placeholder in it.
+   * Collect every placeholder name one argument tree mentions, known or not.
    *
    * @param value - candidate tool arguments.
-   * @returns unknown names, in first-seen order.
+   * @returns names in first-seen order.
    */
-  missing(value) {
-    const unknown = new Set()
+  references(value) {
+    const names = new Set()
     const visit = (node) => {
       if (typeof node === 'string') {
         if (!node.includes('{{')) return
-        for (const match of node.matchAll(PLACEHOLDER_PATTERN)) {
-          if (!this.tokens.has(match[1])) unknown.add(match[1])
-        }
+        for (const match of node.matchAll(PLACEHOLDER_PATTERN)) names.add(match[1])
         return
       }
       if (Array.isArray(node)) {
@@ -264,38 +268,34 @@ class TokenVault {
       }
     }
     visit(value)
-    return [...unknown]
+    return [...names]
   }
 
   /**
-   * Replace every known placeholder in an argument tree with its stored value.
+   * Export every token into a child environment.
    *
-   * @param value - tool arguments.
-   * @returns the substituted copy and whether anything changed.
+   * Token names allow `.` and `-`, which are not valid in a shell variable, so
+   * each name is mapped to a shell-safe one (`.`/`-` become `_`, a leading digit
+   * gains a `T_` prefix) and collisions get a numeric suffix.
+   *
+   * @returns the environment entries and the name mapping the caller reports.
    */
-  substitute(value) {
-    let changed = false
-    const visit = (node) => {
-      if (typeof node === 'string') {
-        if (!node.includes('{{')) return node
-        const next = node.replace(PLACEHOLDER_PATTERN, (match, tokenName) => {
-          const entry = this.tokens.get(tokenName)
-          if (entry === undefined) return match
-          changed = true
-          return entry.value
-        })
-        return next
-      }
-      if (Array.isArray(node)) return node.map(visit)
-      if (node !== null && typeof node === 'object') {
-        const out = {}
-        for (const [key, item] of Object.entries(node)) out[key] = visit(item)
-        return out
-      }
-      return node
+  environment() {
+    const taken = new Set()
+    const env = {}
+    const exports = []
+    const entries = [...this.tokens.values()].sort((left, right) => left.name.localeCompare(right.name, 'en'))
+    for (const entry of entries) {
+      let base = entry.name.replace(/[^A-Za-z0-9_]/g, '_')
+      if (!/^[A-Za-z_]/.test(base)) base = `T_${base}`
+      let candidate = base
+      let suffix = 2
+      while (taken.has(candidate)) candidate = `${base}_${suffix++}`
+      taken.add(candidate)
+      env[candidate] = entry.value
+      exports.push({ name: entry.name, env: candidate, length: entry.value.length })
     }
-    const substituted = visit(value)
-    return { value: substituted, changed }
+    return { env, exports }
   }
 
   /**
@@ -373,23 +373,30 @@ async function readObjectBody(req) {
   }
 }
 
+/** Resolve a relative per-call workdir against the Session's current directory. */
+function resolveWorkdir(modelWorkdir, sessionCwd) {
+  if (modelWorkdir === undefined) return sessionCwd
+  if (sessionCwd !== undefined && !isAbsolute(modelWorkdir)) return `${sessionCwd}${sep}${modelWorkdir}`
+  return modelWorkdir
+}
+
 /** The agent-facing tool: names and notes only, never a value. */
 const TOOL_NAME = 'token_vault'
 
 const TOOL_DESCRIPTION = [
   'List the tokens held by the local token vault (opened from Settings → 令牌库 / Token vault).',
   'Values are never returned: the vault only reports each token name, its note and its length.',
-  'To use a token in another tool call, write the placeholder {{token:NAME}} where the value belongs —',
-  'for example `git clone https://oauth2:{{token:GITHUB_TOKEN}}@github.com/org/repo.git` inside a bash command.',
-  'The vault replaces the placeholder with the real value immediately before the tool runs, and scrubs any',
-  'stored value back to its placeholder from tool output, so the token never appears in the session.',
+  'To use a token, run the command with the `vault_sh` tool: it exports every token into that command\'s environment,',
+  'so the command text says `$GITHUB_TOKEN` and the value never appears in the session, a job record, or a receipt.',
+  '`{{token:…}}` placeholders are NOT substituted any more; a `bash` or `run_code` call that contains one is refused.',
   'Saving, changing or deleting a token is the user\'s action in the panel; this tool cannot read values.',
 ].join(' ')
 
 const TOOL_USAGE = [
-  'Reference a token from another tool call by writing {{token:NAME}} where its value belongs; it is replaced',
-  'right before the tool runs, so the value never enters this session. `write` and `edit` arguments are exempt',
-  '(documentation may spell the syntax). Add, change or delete tokens in Settings → 令牌库 (Token vault).',
+  'Use a token by running the command with `vault_sh` and referencing the token as an exported environment variable',
+  '(for example: vault_sh({ description: "check GitHub identity", command: \'curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user\' })).',
+  'Other tools (including `write` and `edit`, prompts, and hand-offs) treat a placeholder as inert text, so documentation may spell {{token:NAME}} literally.',
+  'Add, change or delete tokens in Settings → 令牌库 (Token vault).',
 ].join(' ')
 
 export function apply(ctx, config = {}) {
@@ -398,6 +405,22 @@ export function apply(ctx, config = {}) {
   // Prompt assembly is synchronous; warm the cache in the background and let a
   // failed read surface on the first route or tool call instead.
   vault.ready().catch((error) => ctx.logger?.warn?.(`token-vault: cannot read ${file}: ${String(error)}`))
+
+  // The same standing confinement `bash` resolves for a call: without a
+  // sandboxing executor there is no policy at all, and the shell applies none.
+  const sandboxPolicy = ctx.shell.sandboxMode === undefined ? undefined : ctx.get('sandboxPolicy')
+
+  /** Resolve this call's sandbox policy from the owning Session, exactly like `bash`. */
+  const resolveSandboxPolicy = (exec) => {
+    const session = exec.agent?.session
+    return sandboxPolicy?.resolve(session === undefined ? {} : { session })
+  }
+
+  /** The value-free catalogue, each entry carrying the environment name it exports. */
+  const listWithEnv = () => {
+    const envByToken = new Map(vault.environment().exports.map((entry) => [entry.name, entry.env]))
+    return vault.list().map((token) => ({ ...token, env: envByToken.get(token.name) ?? token.name }))
+  }
 
   /** Answer an untrusted/unauthenticated request; true when it was rejected. */
   const rejected = (req, res) => {
@@ -439,7 +462,7 @@ export function apply(ctx, config = {}) {
           }
           await respond(res, async () => {
             await vault.ready()
-            return { tokens: vault.list() }
+            return { tokens: listWithEnv() }
           })
         },
       }),
@@ -511,53 +534,53 @@ export function apply(ctx, config = {}) {
           }
           await respond(res, async () => {
             await vault.remove(tokenName)
-            return { tokens: vault.list() }
+            return { tokens: listWithEnv() }
           })
         },
       }),
     `token-vault: POST ${DELETE_PATH}`,
   )
 
-  // Refuse a call that references a token the vault does not hold: it would run
-  // with the literal placeholder instead of a value. Document-text tools are
-  // exempt — they are allowed to spell the placeholder syntax.
+  // Refuse placeholder references in the tools that execute a string. Nothing
+  // substitutes them any more — a substituted command line ends up verbatim in a
+  // durable `job/registered` label and comes back through job receipts — so a
+  // reference there is a usage error with the correct instruction attached.
   ctx.effect(
     () =>
       ctx.on('tools/pre-execute', async (exec, next) => {
-        if (CONTENT_TOOLS.has(exec.name)) return next()
-        const unknown = vault.missing(exec.arguments)
-        if (unknown.length === 0) return next()
-        const known = vault.list().map((token) => token.name)
+        if (!PLACEHOLDER_GUARDED.has(exec.name)) return next()
+        const referenced = vault.references(exec.arguments)
+        if (referenced.length === 0) return next()
+        const exported = vault.environment().exports.map((entry) => `$${entry.env}`)
         return {
           kind: 'deny',
           reason: [
-            `unknown token placeholder${unknown.length > 1 ? 's' : ''}: ${unknown.map((entry) => `{{token:${entry}}}`).join(', ')}.`,
-            known.length > 0 ? `Stored tokens: ${known.join(', ')}.` : 'The token vault is empty.',
-            'The user adds and changes tokens in Settings → 令牌库 (Token vault).',
+            `token placeholders are not substituted into tool arguments: ${referenced.map((entry) => `{{token:${entry}}}`).join(', ')}.`,
+            exported.length > 0
+              ? `Run the command with \`${SHELL_TOOL_NAME}\` instead, where the vault exports the token as an environment variable: ${exported.join(', ')}.`
+              : 'The token vault is empty; the user adds tokens in Settings → 令牌库 (Token vault).',
+            'A substituted command line would be recorded verbatim in the job log and could leak the value.',
           ].join(' '),
         }
       }),
     'token-vault: placeholder guard',
   )
 
-  // Substitute placeholders right before dispatch. The tool call as logged and
-  // presented keeps the placeholder; only the executing arguments carry values.
+  // Scrub stored values out of tool output so an echoing command cannot leak one.
   ctx.effect(
     () =>
-      ctx.on('tools/execute', async (exec, next) => {
-        if (!CONTENT_TOOLS.has(exec.name) && exec.arguments !== undefined) {
-          const substituted = vault.substitute(exec.arguments)
-          if (substituted.changed) {
-            try {
-              exec.arguments = substituted.value
-            } catch (error) {
-              ctx.logger?.warn?.(`token-vault: cannot substitute placeholders for ${exec.name}: ${String(error)}`)
-            }
-          }
+      ctx.on('tools/post-execute', async (exec, result, next) => {
+        const decision = await next()
+        if (decision.kind !== 'accept') return decision
+        const content = vault.scrubContent(decision.content ?? result.content)
+        if (content === (decision.content ?? result.content)) return decision
+        return {
+          kind: 'accept',
+          content,
+          ...decision.additionalContexts === undefined ? {} : { additionalContexts: decision.additionalContexts },
         }
-        return next()
       }),
-    'token-vault: placeholder substitution',
+    'token-vault: result scrub',
   )
 
   // Scrub stored values out of tool output so an echoing command cannot leak one.
@@ -604,12 +627,12 @@ export function apply(ctx, config = {}) {
                 items: {
                   type: 'object',
                   additionalProperties: false,
-                  required: ['name', 'note', 'length', 'placeholder'],
+                  required: ['name', 'note', 'length', 'env'],
                   properties: {
                     name: { type: 'string' },
                     note: { type: 'string' },
                     length: { type: 'number' },
-                    placeholder: { type: 'string' },
+                    env: { type: 'string' },
                   },
                 },
               },
@@ -624,7 +647,7 @@ export function apply(ctx, config = {}) {
               lines.push(`Stored tokens (values hidden, ${value.tokens.length}):`)
               for (const token of value.tokens) {
                 const note = token.note === '' ? '' : ` — ${token.note}`
-                lines.push(`- ${token.name}${note} (${token.length} characters) → ${token.placeholder}`)
+                lines.push(`- ${token.name}${note} (${token.length} characters) → $${token.env}`)
               }
             }
             lines.push('', value.usage)
@@ -634,11 +657,11 @@ export function apply(ctx, config = {}) {
         async execute() {
           await vault.ready()
           return {
-            tokens: vault.list().map((token) => ({
+            tokens: listWithEnv().map((token) => ({
               name: token.name,
               note: token.note,
               length: token.length,
-              placeholder: `{{token:${token.name}}}`,
+              env: token.env,
             })),
             usage: TOOL_USAGE,
           }
@@ -647,9 +670,172 @@ export function apply(ctx, config = {}) {
     'token-vault: tool',
   )
 
-  // Advertise the token names (never values) so every Session can reference them
+  // The only path a token takes into a command: the child process environment.
+  // The command text names variables, never values, so the session log, the job
+  // label, and every receipt stay clean even for long or background-ish work.
+  ctx.effect(
+    () =>
+      ctx.tools.register({
+        name: SHELL_TOOL_NAME,
+        description: [
+          'Run a bash command with the local token vault\'s tokens exported as environment variables.',
+          'Reference them as `$NAME` (double quotes or unquoted — single quotes do not expand).',
+          'The value never appears in the command text, the session log, or a job record; tool output is scrubbed if a command echoes one.',
+          'The command runs under the same sandbox policy, working directory and DSH_* environment as `bash`.',
+          'Use this instead of `bash` whenever a command needs a stored token; `{{token:…}}` placeholders are refused.',
+        ].join(' '),
+        parameters: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['description', 'command'],
+          properties: {
+            description: {
+              type: 'string',
+              description: 'Clear, concise description of what this command does in active voice, 5-10 words (shown in the UI).',
+            },
+            command: {
+              type: 'string',
+              description: 'The bash command, referring to tokens as environment variables such as $GITHUB_TOKEN.',
+            },
+            workdir: {
+              type: 'string',
+              description: 'Working directory. Defaults to the session workspace; a relative path is resolved against it.',
+            },
+            timeoutMs: {
+              type: 'number',
+              description: 'Timeout in milliseconds; the executor applies its configured default and cap and kills the command on expiry.',
+            },
+          },
+        },
+        output: {
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['cwd', 'exitCode', 'signal', 'timedOut', 'aborted', 'stdout', 'stderr', 'exports'],
+            properties: {
+              cwd: { type: 'string' },
+              exitCode: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+              signal: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+              timedOut: { type: 'boolean' },
+              aborted: { type: 'boolean' },
+              stdout: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['text', 'truncated'],
+                properties: {
+                  text: { type: 'string' },
+                  truncated: { type: 'boolean' },
+                  spillPath: { type: 'string' },
+                },
+              },
+              stderr: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['text', 'truncated'],
+                properties: {
+                  text: { type: 'string' },
+                  truncated: { type: 'boolean' },
+                  spillPath: { type: 'string' },
+                },
+              },
+              exports: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['name', 'env', 'length'],
+                  properties: {
+                    name: { type: 'string' },
+                    env: { type: 'string' },
+                    length: { type: 'number' },
+                  },
+                },
+              },
+              sandbox: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['mode', 'denied'],
+                properties: {
+                  mode: { type: 'string' },
+                  denied: { type: 'boolean' },
+                  enforcement: { type: 'string' },
+                  runnerFailed: { type: 'boolean' },
+                },
+              },
+            },
+          },
+          render(_args, value) {
+            const exported = value.exports.length === 0
+              ? 'tokens exported: none (the vault is empty)'
+              : `tokens exported: ${value.exports.map((entry) => `${entry.name} → $${entry.env}`).join(', ')}`
+            const status = [
+              `[exit code: ${value.exitCode === null ? 'none' : value.exitCode}]`,
+              value.signal === null ? '' : `[signal: ${value.signal}]`,
+              value.timedOut ? '[timed out]' : '',
+              value.aborted ? '[aborted]' : '',
+              value.sandbox?.denied === true ? `[sandbox: denied under ${value.sandbox.mode} mode]` : '',
+            ].filter((part) => part !== '').join(' ')
+            const lines = [exported, `cwd: ${value.cwd}`, status]
+            const stdout = value.stdout.text.replace(/\n+$/, '')
+            const stderr = value.stderr.text.replace(/\n+$/, '')
+            if (stdout !== '') lines.push('stdout:', stdout)
+            if (stderr !== '') lines.push('stderr:', stderr)
+            if (stdout === '' && stderr === '') lines.push('(no output)')
+            return [{ type: 'text', text: lines.join('\n') }]
+          },
+        },
+        async execute(args, exec) {
+          await vault.ready()
+          const { env, exports } = vault.environment()
+          const cwd = exec.agent === undefined ? undefined : await ctx.workingDirectory.ensure(exec.agent, exec.signal)
+          const workdir = resolveWorkdir(args.workdir, cwd)
+          const policy = resolveSandboxPolicy(exec)
+          const spec = ctx.shell.resolve({
+            command: args.command,
+            signal: exec.signal,
+            env,
+            dshEnv: ctx.shellEnv.collect(exec),
+            ...workdir === undefined ? {} : { workdir },
+            ...args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs },
+            ...policy === undefined ? {} : { sandboxPolicy: policy },
+          })
+          const result = await (await ctx.shell.execute(spec)).result()
+          return {
+            cwd: spec.workdir,
+            exitCode: result.exitCode,
+            signal: result.signal,
+            timedOut: result.timedOut,
+            aborted: result.aborted,
+            stdout: {
+              text: result.stdout.text,
+              truncated: result.stdout.truncated,
+              ...result.stdout.spillPath === undefined ? {} : { spillPath: result.stdout.spillPath },
+            },
+            stderr: {
+              text: result.stderr.text,
+              truncated: result.stderr.truncated,
+              ...result.stderr.spillPath === undefined ? {} : { spillPath: result.stderr.spillPath },
+            },
+            exports,
+            ...result.sandbox === undefined
+              ? {}
+              : {
+                  sandbox: {
+                    mode: result.sandbox.mode,
+                    denied: result.sandbox.denied,
+                    ...result.sandbox.enforcement === undefined ? {} : { enforcement: result.sandbox.enforcement },
+                    ...result.sandbox.runnerFailed === undefined ? {} : { runnerFailed: result.sandbox.runnerFailed },
+                  },
+                },
+          }
+        },
+      }),
+    'token-vault: shell tool',
+  )
+
+  // Advertise the token names (never values) so every Session can use them
   // without a discovery round trip. `interpolate: false` keeps the documented
-  // placeholder literal instead of letting prompt variables consume it.
+  // `$NAME` forms literal instead of letting prompt variables consume them.
   ctx.effect(
     () =>
       ctx.systemPrompt.section({
@@ -666,9 +852,12 @@ export function apply(ctx, config = {}) {
             'The user keeps these secrets in the local token vault; their values are never shown in this session:',
             ...rows,
             '',
-            'Use one by writing {{token:NAME}} where its value belongs in a tool call\'s arguments (for example inside a bash command).',
-            'The vault replaces the placeholder with the real value right before the tool runs, and scrubs stored values out of tool output.',
-            '`write` and `edit` arguments are exempt, so documentation and templates can spell the placeholder literally.',
+            `Run a command that needs one with \`${SHELL_TOOL_NAME}\`, which exports each token into the child environment:`,
+            `  ${SHELL_TOOL_NAME}({ description: "check GitHub identity", command: 'curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user' })`,
+            'Reference tokens as `$NAME` (double quotes or unquoted). Single quotes do not expand variables.',
+            'Values never enter the command text, so they cannot reach the session log, a job record, or a receipt; tool output is scrubbed if a command echoes one.',
+            'Never write `{{token:…}}` inside a `bash` or `run_code` call: placeholders are no longer substituted, and such a call is refused.',
+            'Everywhere else (documents, prompts, hand-offs) the placeholder stays inert text, so documentation can spell the syntax.',
             'Adding, changing or deleting a token is the user\'s action in Settings → 令牌库 (Token vault); call the `token_vault` tool to re-list them.',
           ].join('\n')
         },

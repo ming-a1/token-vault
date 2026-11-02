@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Token Vault",
-    "description": "Stores Git and other API tokens locally in Settings. Sessions reference a token with {{token:NAME}} and never see its value."
+    "description": "Stores Git and other API tokens locally in Settings. Sessions use a token through the vault_sh tool's environment variables and never see its value."
   }
 }
