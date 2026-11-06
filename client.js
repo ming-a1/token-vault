@@ -449,21 +449,60 @@ window.__ModuleLoader__.load({
       )
     }
 
+    const PAGE_ID = 'token-vault'
+
+    const PAGE_STYLE =
+      '.tv-page{display:flex;flex-direction:column;width:100%;height:100%;min-height:0;overflow:auto;scrollbar-gutter:stable;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}' +
+      '.tv-page-inner{box-sizing:border-box;width:100%;max-width:820px;margin:0 auto;padding:26px clamp(20px,4vw,40px) 48px}'
+
+    /** Full-page shell so the vault also works as a `main` panel (hub tab). */
+    function TokenPage() {
+      return h(
+        'div',
+        { className: 'tv-page' },
+        h('style', { key: 'page-style' }, PAGE_STYLE),
+        h('div', { className: 'tv-page-inner' }, h(TokenSection)),
+      )
+    }
+
+    /** Sidebar glyph: a key, matching the settings page's subject. */
+    function VaultIcon({ size = 18, active = false }) {
+      return h(
+        'svg',
+        {
+          width: size,
+          height: size,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          'aria-hidden': true,
+          focusable: 'false',
+          style: { opacity: active ? 1 : 0.8 },
+        },
+        h('circle', { cx: 8.4, cy: 12, r: 3.6, stroke: 'currentColor', strokeWidth: 1.7 }),
+        h('path', {
+          d: 'M12 12h8.2M17.4 12v2.9M20.2 12v2.2',
+          stroke: 'currentColor',
+          strokeWidth: 1.7,
+          strokeLinecap: 'round',
+        }),
+      )
+    }
+
     return {
       inject: ['slots', 'locale'],
       apply(ctx) {
         client = ctx
         t = ctx.locale.bind(LOCALE_NS)
         ctx.effect(() => ctx.locale.register(LOCALE_NS, DICTIONARIES))
-        ctx.slots.inject('settings.section', () =>
+        // A real panel beside the settings section: a hub (or any collector) can
+        // pick it up from the sidebar list and render it as its own tab.
+        ctx.slots.inject('main', () =>
+          ctx.slots.register({ name: 'main', key: PAGE_ID, locale: LOCALE_NS }, TokenPage),
+        )
+        ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register(
-            {
-              name: 'settings.section',
-              id: 'token-vault',
-              order: 60,
-              label: () => t('nav'),
-            },
-            TokenSection,
+            { name: 'sidebar.panellist', id: PAGE_ID, order: 40, locale: LOCALE_NS, label: () => t('nav') },
+            VaultIcon,
           ),
         )
       },
