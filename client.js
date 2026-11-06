@@ -262,7 +262,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** The Token vault settings page. */
+    /** The Token vault panel (shared by the sidebar page). */
     function TokenSection() {
       useLocaleRevision()
       const [tokens, setTokens] = useState(null)
@@ -465,7 +465,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** Sidebar glyph: a key, matching the settings page's subject. */
+    /** Sidebar glyph: a key. */
     function VaultIcon({ size = 18, active = false }) {
       return h(
         'svg',
@@ -494,8 +494,8 @@ window.__ModuleLoader__.load({
         client = ctx
         t = ctx.locale.bind(LOCALE_NS)
         ctx.effect(() => ctx.locale.register(LOCALE_NS, DICTIONARIES))
-        // A real panel beside the settings section: a hub (or any collector) can
-        // pick it up from the sidebar list and render it as its own tab.
+        // The panel itself: a hub (or any collector) picks it up from the
+        // sidebar list and renders it as its own tab.
         ctx.slots.inject('main', () =>
           ctx.slots.register({ name: 'main', key: PAGE_ID, locale: LOCALE_NS }, TokenPage),
         )
