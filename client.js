@@ -62,6 +62,8 @@ window.__ModuleLoader__.load({
         'notice.updated': 'Updated {name}.',
         'notice.deleted': 'Deleted {name}.',
         'transfer.title': 'Import / export',
+        'transfer.exportTitle': 'Export',
+        'transfer.importTitle': 'Import',
         'transfer.lead':
           'Export writes every token to a file. With a password the file is encrypted (scrypt + AES-256-GCM); without one it is plain JSON.',
         'transfer.exportPassword': 'Export password',
@@ -121,6 +123,8 @@ window.__ModuleLoader__.load({
         'notice.updated': '已更新 {name}。',
         'notice.deleted': '已删除 {name}。',
         'transfer.title': '导入 / 导出',
+        'transfer.exportTitle': '导出',
+        'transfer.importTitle': '导入',
         'transfer.lead':
           '导出会把所有令牌写进一个文件；填了密码就用 scrypt + AES-256-GCM 加密，不填就是明文 JSON。',
         'transfer.exportPassword': '导出密码',
@@ -179,14 +183,18 @@ window.__ModuleLoader__.load({
 .tv-notice{margin:0;color:var(--dsw-alias-state-success-primary);font-size:12px;line-height:18px}
 .tv-usage{display:flex;flex-direction:column;gap:6px;padding-top:12px;border-top:.5px solid var(--dsw-alias-border-l1)}
 .tv-usage p{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
-.tv-transfer{display:flex;flex-direction:column;gap:10px;padding-top:14px;border-top:.5px solid var(--dsw-alias-border-l1)}
-.tv-transferRow{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
-.tv-transferRow .tv-field{flex:1 1 200px}
-.tv-transferAction{display:flex;gap:10px;align-items:flex-end;flex:0 0 auto}
-.tv-fileName{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tv-transfer{display:flex;flex-direction:column;gap:16px;padding-top:16px;border-top:.5px solid var(--dsw-alias-border-l1)}
+.tv-block{display:flex;flex-direction:column;gap:8px;min-width:0}
+.tv-blockTitle{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:20px}
+.tv-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
+.tv-line>.tv-input{flex:1 1 auto;min-width:0}
+.tv-inline{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:nowrap}
+.tv-fileName{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 .tv-secondary{box-sizing:border-box;height:32px;padding:0 14px;border:.5px solid var(--dsw-alias-border-l3);border-radius:8px;background:0 0;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;cursor:pointer;white-space:nowrap}
 .tv-secondary:hover{background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}
 .tv-secondary:disabled{opacity:.55;cursor:default}
+.tv-transfer .tv-primary{min-width:88px;justify-content:center}
+.tv-transfer .tv-select{width:110px;flex:0 0 auto}
 .tv-select{box-sizing:border-box;height:32px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px}
 .tv-hint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 .tv-usage code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l1);border-radius:6px;padding:6px 8px;overflow-wrap:anywhere}
@@ -572,25 +580,31 @@ window.__ModuleLoader__.load({
           h('p', { className: 'tv-lead' }, t('transfer.lead')),
           h(
             'div',
-            { className: 'tv-transferRow' },
-            h(Field, {
-              label: t('transfer.exportPassword'),
-              type: 'password',
-              autoComplete: 'new-password',
-              value: exportPassword,
-              placeholder: t('transfer.exportPasswordPlaceholder'),
-              onChange: (event) => setExportPassword(event.target.value),
-            }),
-            h('button', { type: 'button', className: 'tv-primary', disabled: busy, onClick: doExport }, busy ? t('transfer.exporting') : t('transfer.exportAction')),
-          ),
-          h('p', { className: 'tv-hint' }, t('transfer.plainWarning')),
-          h(
-            'div',
-            { className: 'tv-transferRow' },
+            { className: 'tv-block' },
+            h('div', { className: 'tv-blockTitle' }, t('transfer.exportTitle')),
             h(
               'div',
-              { className: 'tv-field' },
-              h('span', null, t('transfer.file')),
+              { className: 'tv-line' },
+              h('input', {
+                className: 'tv-input',
+                type: 'password',
+                autoComplete: 'new-password',
+                'aria-label': t('transfer.exportPassword'),
+                value: exportPassword,
+                placeholder: t('transfer.exportPasswordPlaceholder'),
+                onChange: (event) => setExportPassword(event.target.value),
+              }),
+              h('button', { type: 'button', className: 'tv-primary', disabled: busy, onClick: doExport }, busy ? t('transfer.exporting') : t('transfer.exportAction')),
+            ),
+            h('p', { className: 'tv-hint' }, t('transfer.plainWarning')),
+          ),
+          h(
+            'div',
+            { className: 'tv-block' },
+            h('div', { className: 'tv-blockTitle' }, t('transfer.importTitle')),
+            h(
+              'div',
+              { className: 'tv-line' },
               h('input', {
                 ref: fileInput,
                 type: 'file',
@@ -614,32 +628,34 @@ window.__ModuleLoader__.load({
                 },
                 t('transfer.pickFile'),
               ),
-              h('span', { className: 'tv-hint tv-fileName' }, importFile === null ? t('transfer.noFile') : importFile.name),
+              h('span', { className: 'tv-fileName' }, importFile === null ? t('transfer.noFile') : importFile.name),
             ),
-            h(Field, {
-              label: t('transfer.importPassword'),
-              type: 'password',
-              autoComplete: 'new-password',
-              value: importPassword,
-              placeholder: t('transfer.importPasswordPlaceholder'),
-              onChange: (event) => setImportPassword(event.target.value),
-            }),
             h(
-              'label',
-              { className: 'tv-field' },
-              h('span', null, t('transfer.mode')),
+              'div',
+              { className: 'tv-line' },
+              h('input', {
+                className: 'tv-input',
+                type: 'password',
+                autoComplete: 'new-password',
+                'aria-label': t('transfer.importPassword'),
+                value: importPassword,
+                placeholder: t('transfer.importPasswordPlaceholder'),
+                onChange: (event) => setImportPassword(event.target.value),
+              }),
+              h('span', { className: 'tv-inline' }, t('transfer.mode')),
               h(
                 'select',
-                { className: 'tv-select', value: importMode, onChange: (event) => setImportMode(event.target.value) },
+                { className: 'tv-select', 'aria-label': t('transfer.mode'), value: importMode, onChange: (event) => setImportMode(event.target.value) },
                 h('option', { value: 'merge' }, t('transfer.modeMerge')),
                 h('option', { value: 'overwrite' }, t('transfer.modeOverwrite')),
               ),
+              h('button', { type: 'button', className: 'tv-primary', disabled: busy || importFile === null, onClick: doImport }, busy ? t('transfer.importing') : t('transfer.importAction')),
             ),
-            h('button', { type: 'button', className: 'tv-primary', disabled: busy || importFile === null, onClick: doImport }, busy ? t('transfer.importing') : t('transfer.importAction')),
+            h('p', { className: 'tv-hint' }, t('transfer.hint')),
+            transfer === null ? null : h('p', { className: transfer.kind === 'error' ? 'tv-error' : 'tv-notice', role: 'status' }, transfer.text),
           ),
-          h('p', { className: 'tv-hint' }, t('transfer.hint')),
-          transfer === null ? null : h('p', { className: transfer.kind === 'error' ? 'tv-error' : 'tv-notice', role: 'status' }, transfer.text),
         ),
+
         h(
           'div',
           { className: 'tv-usage' },
