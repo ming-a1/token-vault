@@ -468,9 +468,9 @@ window.__ModuleLoader__.load({
         try {
           const payload = await call(EXPORT_ROUTE, { password: exportPassword })
           download(payload.filename, payload.payload)
-          setTransfer({ kind: 'ok', text: t('transfer.exported', { count: payload.count, filename: payload.filename }) })
+          setTransfer({ kind: 'ok', scope: 'export', text: t('transfer.exported', { count: payload.count, filename: payload.filename }) })
         } catch (failure) {
-          setTransfer({ kind: 'error', text: messageOf(failure) })
+          setTransfer({ kind: 'error', scope: 'export', text: messageOf(failure) })
         } finally {
           setBusy(false)
         }
@@ -493,6 +493,7 @@ window.__ModuleLoader__.load({
           if (fileInput.current !== null) fileInput.current.value = ''
           setTransfer({
             kind: 'ok',
+            scope: 'import',
             text: t('transfer.imported', {
               added: payload.added.length,
               updated: payload.updated.length,
@@ -501,7 +502,7 @@ window.__ModuleLoader__.load({
           })
           await refresh()
         } catch (failure) {
-          setTransfer({ kind: 'error', text: messageOf(failure) })
+          setTransfer({ kind: 'error', scope: 'import', text: messageOf(failure) })
         } finally {
           setBusy(false)
         }
@@ -597,6 +598,9 @@ window.__ModuleLoader__.load({
               }),
               h('button', { type: 'button', className: 'tv-primary', disabled: busy, onClick: doExport }, busy ? t('transfer.exporting') : t('transfer.exportAction')),
               h('p', { className: 'tv-hint' }, t('transfer.plainWarning')),
+              transfer !== null && transfer.scope === 'export'
+                ? h('p', { className: transfer.kind === 'error' ? 'tv-error' : 'tv-notice', role: 'status' }, transfer.text)
+                : null,
             ),
             h(
               'div',
@@ -652,7 +656,9 @@ window.__ModuleLoader__.load({
                 h('button', { type: 'button', className: 'tv-primary', disabled: busy || importFile === null, onClick: doImport }, busy ? t('transfer.importing') : t('transfer.importAction')),
               ),
               h('p', { className: 'tv-hint' }, t('transfer.hint')),
-              transfer === null ? null : h('p', { className: transfer.kind === 'error' ? 'tv-error' : 'tv-notice', role: 'status' }, transfer.text),
+              transfer !== null && transfer.scope === 'import'
+                ? h('p', { className: transfer.kind === 'error' ? 'tv-error' : 'tv-notice', role: 'status' }, transfer.text)
+                : null,
             ),
           ),
         ),
