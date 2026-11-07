@@ -22,9 +22,11 @@
  * @module @local/token-vault
  */
 
+import { createCipheriv, createDecipheriv, randomBytes, scrypt } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, sep } from 'node:path'
+import { promisify } from 'node:util'
 
 /** Cordis plugin name. */
 export const name = 'token-vault'
@@ -47,6 +49,25 @@ const MAX_NOTE_LENGTH = 500
 /** Request bodies are tiny JSON objects; anything larger is hostile. */
 const MAX_BODY_BYTES = 64 * 1024
 
+/** An import carries every token in one body; it gets its own, larger ceiling. */
+const MAX_IMPORT_BYTES = 2 * 1024 * 1024
+
+/** Most tokens one import may bring in. */
+const MAX_IMPORT_TOKENS = 500
+
+/** Export document discriminator and version. */
+const EXPORT_FORMAT = 'token-vault/export'
+const EXPORT_VERSION = 1
+
+/** Key-derivation parameters for an encrypted export (scrypt, Node builtin). */
+const KDF = { name: 'scrypt', N: 16384, r: 8, p: 1, keylen: 32 }
+
+/** Cipher used for an encrypted export. */
+const CIPHER = 'aes-256-gcm'
+
+/** Longest accepted export password. */
+const MAX_PASSWORD_LENGTH = 256
+
 /** Values shorter than this are never scrubbed — they are too likely to be ordinary text. */
 const MIN_SCRUB_LENGTH = 8
 
@@ -61,6 +82,8 @@ const PLACEHOLDER_GUARDED = new Set(['bash', 'run_code'])
 const LIST_PATH = '/token-vault/list'
 const SAVE_PATH = '/token-vault/save'
 const DELETE_PATH = '/token-vault/delete'
+const EXPORT_PATH = '/token-vault/export'
+const IMPORT_PATH = '/token-vault/import'
 
 /** The shell tool: the only way a token reaches a command. */
 const SHELL_TOOL_NAME = 'vault_sh'
@@ -230,6 +253,75 @@ class TokenVault {
     return true
   }
 
+  /**
+   * Every token WITH its value, for the export route only.
+   *
+   * This is the single place the plugin hands values back out: the panel's
+   * explicit export action. No tool, and no other route, can reach it.
+   *
+   * @returns plain records ordered by name.
+   */
+  exportAll() {
+    return [...this.tokens.values()]
+      .sort((left, right) => left.name.localeCompare(right.name, 'en'))
+      .map((entry) => ({
+        name: entry.name,
+        value: entry.value,
+        note: entry.note,
+        createdAt: entry.createdAt,
+        updatedAt: entry.updatedAt,
+      }))
+  }
+
+  /**
+   * Merge validated entries from one import.
+   *
+   * `merge` keeps an existing token untouched; `overwrite` replaces its value
+   * and note but keeps its original creation time. Both add unknown names.
+   *
+   * @param entries - validated `{ name, value, note }` records.
+   * @param mode - `merge` or `overwrite`.
+   * @returns counts plus the affected names.
+   */
+  async importEntries(entries, mode) {
+    await this.ready()
+    const added = []
+    const updated = []
+    const skipped = []
+    const now = new Date().toISOString()
+    for (const entry of entries) {
+      const existing = this.tokens.get(entry.name)
+      if (existing === undefined) {
+        this.tokens.set(entry.name, {
+          name: entry.name,
+          value: entry.value,
+          note: entry.note,
+          createdAt: now,
+          updatedAt: now,
+        })
+        added.push(entry.name)
+        continue
+      }
+      if (mode !== 'overwrite') {
+        skipped.push(entry.name)
+        continue
+      }
+      this.tokens.set(entry.name, {
+        name: entry.name,
+        value: entry.value,
+        note: entry.note,
+        createdAt: existing.createdAt,
+        updatedAt: now,
+      })
+      updated.push(entry.name)
+    }
+    if (added.length > 0 || updated.length > 0) {
+      await this.flush()
+      this.reindex()
+    }
+    return { added, updated, skipped }
+  }
+
   /** Write the document atomically: a private temp file in the same directory, then rename. */
   flush() {
     const payload = `${JSON.stringify({ version: 1, tokens: Object.fromEntries(this.tokens) }, null, 2)}\n`
@@ -351,13 +443,18 @@ function sendMethodNotAllowed(res, allow) {
   res.end()
 }
 
-/** Collect a bounded request body as a JSON object; null when it is not one. */
-async function readObjectBody(req) {
+/**
+ * Collect a bounded request body as a JSON object; null when it is not one.
+ *
+ * @param req - the incoming request.
+ * @param maxBytes - ceiling for this route (imports are larger than commands).
+ */
+async function readObjectBody(req, maxBytes = MAX_BODY_BYTES) {
   const chunks = []
   let size = 0
   for await (const chunk of req) {
     size += chunk.byteLength
-    if (size > MAX_BODY_BYTES) {
+    if (size > maxBytes) {
       req.resume()
       return null
     }
@@ -371,6 +468,116 @@ async function readObjectBody(req) {
   } catch {
     return null
   }
+}
+
+const scryptAsync = promisify(scrypt)
+
+/** A shuffled base64 string is not enough for a key; refuse unusable derivation material. */
+function decodeBase64(value, expectedLength) {
+  if (typeof value !== 'string' || value === '') return undefined
+  const bytes = Buffer.from(value, 'base64')
+  return expectedLength === undefined || bytes.length === expectedLength ? bytes : undefined
+}
+
+/**
+ * Encrypt one export document with a password.
+ *
+ * scrypt derives a 256-bit key from (password, random salt); AES-256-GCM then
+ * authenticates the ciphertext, so a wrong password or a truncated file fails
+ * closed instead of yielding garbage.
+ *
+ * @param document - the plaintext export document.
+ * @param password - user-chosen password.
+ * @returns the encrypted envelope the panel downloads.
+ */
+async function encryptExport(document, password) {
+  const salt = randomBytes(16)
+  const iv = randomBytes(12)
+  const key = await scryptAsync(password, salt, KDF.keylen, { N: KDF.N, r: KDF.r, p: KDF.p })
+  const cipher = createCipheriv(CIPHER, key, iv)
+  const ciphertext = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(document), 'utf8')), cipher.final()])
+  return {
+    format: EXPORT_FORMAT,
+    version: EXPORT_VERSION,
+    encrypted: true,
+    exportedAt: new Date().toISOString(),
+    kdf: { ...KDF, salt: salt.toString('base64') },
+    cipher: { name: CIPHER, iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64') },
+    ciphertext: ciphertext.toString('base64'),
+  }
+}
+
+/**
+ * Decrypt one encrypted export envelope.
+ *
+ * @param envelope - the parsed file content.
+ * @param password - user-supplied password.
+ * @returns the plaintext export document.
+ * @throws {VaultError} when the envelope is malformed or the password is wrong.
+ */
+async function decryptExport(envelope, password) {
+  const kdf = envelope.kdf ?? {}
+  const cipher = envelope.cipher ?? {}
+  if (kdf.name !== KDF.name || Number(kdf.N) !== KDF.N || Number(kdf.r) !== KDF.r || Number(kdf.p) !== KDF.p) {
+    throw new VaultError('unsupported encrypted export: unknown key derivation parameters')
+  }
+  const keylen = Number(kdf.keylen)
+  if (!Number.isInteger(keylen) || keylen < 16 || keylen > 64) throw new VaultError('unsupported encrypted export: unknown key length')
+  const salt = decodeBase64(kdf.salt, 16)
+  const iv = decodeBase64(cipher.iv, 12)
+  const tag = decodeBase64(cipher.tag, 16)
+  const ciphertext = decodeBase64(envelope.ciphertext)
+  if (secretMissing(salt) || secretMissing(iv) || secretMissing(tag) || secretMissing(ciphertext)) {
+    throw new VaultError('the export file is damaged: base64 fields are missing or unreadable')
+  }
+  const key = await scryptAsync(password, salt, keylen, { N: KDF.N, r: KDF.r, p: KDF.p })
+  try {
+    const decipher = createDecipheriv(CIPHER, key, iv)
+    decipher.setAuthTag(tag)
+    const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+    return JSON.parse(plaintext.toString('utf8'))
+  } catch {
+    throw new VaultError('cannot decrypt the export file: wrong password or damaged file')
+  }
+}
+
+/** Whether one decoded field is absent (a named helper keeps the guard readable). */
+function secretMissing(value) {
+  return value === undefined || value.length === 0
+}
+
+/**
+ * Validate one decoded export document into importable entries.
+ *
+ * Fails closed: one bad entry rejects the whole import, so a partially imported
+ * vault never replaces a good one.
+ *
+ * @param document - the plaintext export document.
+ * @returns the accepted entries.
+ * @throws {VaultError} when the document is not a token-vault export or holds an invalid entry.
+ */
+function parseImportDocument(document) {
+  if (document === null || typeof document !== 'object') throw new VaultError('the file is not a token-vault export')
+  if (document.format !== undefined && document.format !== EXPORT_FORMAT) {
+    throw new VaultError('the file is not a token-vault export')
+  }
+  const list = Array.isArray(document.tokens) ? document.tokens : []
+  if (list.length === 0) throw new VaultError('the export contains no tokens')
+  if (list.length > MAX_IMPORT_TOKENS) throw new VaultError(`the export contains more than ${MAX_IMPORT_TOKENS} tokens`)
+  const invalid = []
+  const entries = []
+  for (const raw of list) {
+    const tokenName = typeof raw?.name === 'string' ? raw.name : ''
+    const value = typeof raw?.value === 'string' ? raw.value : ''
+    const note = typeof raw?.note === 'string' ? raw.note : ''
+    if (!NAME_PATTERN.test(tokenName) || value === '' || value.length > MAX_VALUE_LENGTH || note.length > MAX_NOTE_LENGTH) {
+      invalid.push(tokenName === '' ? '(unnamed)' : tokenName)
+      continue
+    }
+    entries.push({ name: tokenName, value, note })
+  }
+  if (invalid.length > 0) throw new VaultError(`the export contains invalid entries: ${invalid.join(', ')}`)
+  return entries
 }
 
 /** Resolve a relative per-call workdir against the Session's current directory. */
@@ -539,6 +746,107 @@ export function apply(ctx, config = {}) {
         },
       }),
     `token-vault: POST ${DELETE_PATH}`,
+  )
+
+  // POST export: the one route that returns values. It exists for the panel's
+  // explicit export action; an optional password encrypts the download.
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: EXPORT_PATH,
+        handler: async (req, res) => {
+          if (rejected(req, res)) return
+          if (req.method !== 'POST') {
+            sendMethodNotAllowed(res, 'POST')
+            return
+          }
+          const body = await readObjectBody(req)
+          if (body === null) {
+            sendJson(res, 400, { message: 'the request body must be a JSON object' })
+            return
+          }
+          const password = typeof body.password === 'string' ? body.password : ''
+          if (password.length > MAX_PASSWORD_LENGTH) {
+            sendJson(res, 400, { message: `the password must be at most ${MAX_PASSWORD_LENGTH} characters` })
+            return
+          }
+          await respond(res, async () => {
+            await vault.ready()
+            const tokens = vault.exportAll()
+            const document = {
+              format: EXPORT_FORMAT,
+              version: EXPORT_VERSION,
+              exportedAt: new Date().toISOString(),
+              tokens,
+            }
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+            if (password === '') {
+              return {
+                encrypted: false,
+                count: tokens.length,
+                filename: `token-vault-${stamp}.json`,
+                payload: `${JSON.stringify(document, null, 2)}\n`,
+              }
+            }
+            return {
+              encrypted: true,
+              count: tokens.length,
+              filename: `token-vault-${stamp}.tvault`,
+              payload: `${JSON.stringify(await encryptExport(document, password), null, 2)}\n`,
+            }
+          })
+        },
+      }),
+    `token-vault: POST ${EXPORT_PATH}`,
+  )
+
+  // POST import: merge a previously exported file (plaintext or encrypted).
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: 'exact',
+        path: IMPORT_PATH,
+        handler: async (req, res) => {
+          if (rejected(req, res)) return
+          if (req.method !== 'POST') {
+            sendMethodNotAllowed(res, 'POST')
+            return
+          }
+          const body = await readObjectBody(req, MAX_IMPORT_BYTES)
+          if (body === null) {
+            sendJson(res, 400, { message: 'the request body must be a JSON object (or the file is too large)' })
+            return
+          }
+          const payload = typeof body.payload === 'string' ? body.payload : ''
+          if (payload.trim() === '') {
+            sendJson(res, 400, { message: 'the file is empty' })
+            return
+          }
+          let parsed
+          try {
+            parsed = JSON.parse(payload)
+          } catch {
+            sendJson(res, 400, { message: 'the file is not valid JSON' })
+            return
+          }
+          const password = typeof body.password === 'string' ? body.password : ''
+          if (password.length > MAX_PASSWORD_LENGTH) {
+            sendJson(res, 400, { message: `the password must be at most ${MAX_PASSWORD_LENGTH} characters` })
+            return
+          }
+          const mode = body.mode === 'overwrite' ? 'overwrite' : 'merge'
+          await respond(res, async () => {
+            const document = parsed !== null && typeof parsed === 'object' && parsed.encrypted === true
+              ? await decryptExport(parsed, password)
+              : parsed
+            const entries = parseImportDocument(document)
+            const result = await vault.importEntries(entries, mode)
+            return { ...result, tokens: listWithEnv() }
+          })
+        },
+      }),
+    `token-vault: POST ${IMPORT_PATH}`,
   )
 
   // Refuse placeholder references in the tools that execute a string. Nothing

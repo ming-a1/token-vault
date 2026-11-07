@@ -17,6 +17,8 @@ window.__ModuleLoader__.load({
 
     const LOCALE_NS = 'token-vault'
     const LIST_ROUTE = 'token-vault/list'
+    const EXPORT_ROUTE = 'token-vault/export'
+    const IMPORT_ROUTE = 'token-vault/import'
     const SAVE_ROUTE = 'token-vault/save'
     const DELETE_ROUTE = 'token-vault/delete'
     const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/
@@ -59,6 +61,29 @@ window.__ModuleLoader__.load({
         'notice.saved': 'Saved {name}.',
         'notice.updated': 'Updated {name}.',
         'notice.deleted': 'Deleted {name}.',
+        'transfer.title': 'Import / export',
+        'transfer.lead':
+          'Export writes every token to a file. With a password the file is encrypted (scrypt + AES-256-GCM); without one it is plain JSON.',
+        'transfer.exportPassword': 'Export password',
+        'transfer.exportPasswordPlaceholder': 'Leave blank to export plain JSON',
+        'transfer.exportAction': 'Export',
+        'transfer.exporting': 'Exporting…',
+        'transfer.plainWarning': 'A plain export writes token values into the file — store it carefully.',
+        'transfer.confirmPlain': 'Export without a password? The file will contain the token values in plain text.',
+        'transfer.file': 'File',
+        'transfer.pickFile': 'Choose file…',
+        'transfer.noFile': 'No file selected',
+        'transfer.importPassword': 'File password',
+        'transfer.importPasswordPlaceholder': 'Only for an encrypted .tvault file',
+        'transfer.mode': 'Existing names',
+        'transfer.modeMerge': 'Keep',
+        'transfer.modeOverwrite': 'Overwrite',
+        'transfer.importAction': 'Import',
+        'transfer.importing': 'Importing…',
+        'transfer.hint': 'Accepts a plain .json export or an encrypted .tvault file.',
+        'transfer.exported': 'Exported {count} token(s) to {filename}.',
+        'transfer.imported': 'Import finished: {added} added, {updated} updated, {skipped} kept.',
+        'transfer.failed': 'Import failed.',
       },
       zh: {
         nav: '令牌库',
@@ -95,6 +120,29 @@ window.__ModuleLoader__.load({
         'notice.saved': '已保存 {name}。',
         'notice.updated': '已更新 {name}。',
         'notice.deleted': '已删除 {name}。',
+        'transfer.title': '导入 / 导出',
+        'transfer.lead':
+          '导出会把所有令牌写进一个文件；填了密码就用 scrypt + AES-256-GCM 加密，不填就是明文 JSON。',
+        'transfer.exportPassword': '导出密码',
+        'transfer.exportPasswordPlaceholder': '留空 = 明文导出',
+        'transfer.exportAction': '导出',
+        'transfer.exporting': '导出中…',
+        'transfer.plainWarning': '明文导出会把令牌值写进文件，请妥善保存。',
+        'transfer.confirmPlain': '不设密码直接导出？文件里的令牌是明文。',
+        'transfer.file': '文件',
+        'transfer.pickFile': '选择文件…',
+        'transfer.noFile': '未选择文件',
+        'transfer.importPassword': '文件密码',
+        'transfer.importPasswordPlaceholder': '只有加密的 .tvault 文件才需要',
+        'transfer.mode': '同名令牌',
+        'transfer.modeMerge': '保留现有',
+        'transfer.modeOverwrite': '覆盖',
+        'transfer.importAction': '导入',
+        'transfer.importing': '导入中…',
+        'transfer.hint': '支持明文 .json 导出文件或加密的 .tvault 文件。',
+        'transfer.exported': '已导出 {count} 个令牌到 {filename}。',
+        'transfer.imported': '导入完成：新增 {added}，更新 {updated}，保留 {skipped}。',
+        'transfer.failed': '导入失败。',
       },
     }
 
@@ -131,6 +179,13 @@ window.__ModuleLoader__.load({
 .tv-notice{margin:0;color:var(--dsw-alias-state-success-primary);font-size:12px;line-height:18px}
 .tv-usage{display:flex;flex-direction:column;gap:6px;padding-top:12px;border-top:.5px solid var(--dsw-alias-border-l1)}
 .tv-usage p{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.tv-transfer{display:flex;flex-direction:column;gap:10px;padding-top:14px;border-top:.5px solid var(--dsw-alias-border-l1)}
+.tv-transferRow{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.tv-transferRow .tv-field{flex:1 1 200px}
+.tv-transferAction{display:flex;gap:10px;align-items:flex-end;flex:0 0 auto}
+.tv-file{max-width:100%;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+.tv-select{box-sizing:border-box;height:32px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px}
+.tv-hint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 .tv-usage code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l1);border-radius:6px;padding:6px 8px;overflow-wrap:anywhere}
 `
 
@@ -147,6 +202,18 @@ window.__ModuleLoader__.load({
     /** Re-render the page when the active locale or its dictionaries change. */
     function useLocaleRevision() {
       return useSyncExternalStore(subscribeLocale, readLocaleRevision)
+    }
+
+    /** Save one exported payload as a download; the anchor never enters the DOM. */
+    function download(filename, text) {
+      const blob = new Blob([text], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = filename === '' ? 'token-vault-export.json' : filename
+      anchor.rel = 'noopener'
+      anchor.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
     }
 
     /** Human-readable message for one failed route call. */
@@ -273,6 +340,11 @@ window.__ModuleLoader__.load({
       const [editing, setEditing] = useState(null)
       const [pendingDelete, setPendingDelete] = useState('')
       const [copied, setCopied] = useState('')
+      const [exportPassword, setExportPassword] = useState('')
+      const [importPassword, setImportPassword] = useState('')
+      const [importMode, setImportMode] = useState('merge')
+      const [importFile, setImportFile] = useState(null)
+      const [transfer, setTransfer] = useState(null)
 
       const refresh = useCallback(async () => {
         try {
@@ -373,6 +445,54 @@ window.__ModuleLoader__.load({
         return date.toLocaleString()
       }
 
+      const doExport = async () => {
+        if (busy) return
+        if (exportPassword === '' && typeof window.confirm === 'function' && !window.confirm(t('transfer.confirmPlain'))) return
+        setBusy(true)
+        setError('')
+        setNotice('')
+        setTransfer(null)
+        try {
+          const payload = await call(EXPORT_ROUTE, { password: exportPassword })
+          download(payload.filename, payload.payload)
+          setTransfer({ kind: 'ok', text: t('transfer.exported', { count: payload.count, filename: payload.filename }) })
+        } catch (failure) {
+          setTransfer({ kind: 'error', text: messageOf(failure) })
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const doImport = async () => {
+        if (busy || importFile === null) return
+        setBusy(true)
+        setError('')
+        setNotice('')
+        setTransfer(null)
+        try {
+          const text = await importFile.text()
+          const payload = await call(IMPORT_ROUTE, {
+            payload: text,
+            password: importPassword,
+            mode: importMode,
+          })
+          setImportFile(null)
+          setTransfer({
+            kind: 'ok',
+            text: t('transfer.imported', {
+              added: payload.added.length,
+              updated: payload.updated.length,
+              skipped: payload.skipped.length,
+            }),
+          })
+          await refresh()
+        } catch (failure) {
+          setTransfer({ kind: 'error', text: messageOf(failure) })
+        } finally {
+          setBusy(false)
+        }
+      }
+
       return h(
         'div',
         { className: 'tv-section' },
@@ -440,6 +560,68 @@ window.__ModuleLoader__.load({
                   }),
                 ),
               ),
+        h(
+          'div',
+          { className: 'tv-transfer' },
+          h('h3', { className: 'tv-listTitle' }, t('transfer.title')),
+          h('p', { className: 'tv-lead' }, t('transfer.lead')),
+          h(
+            'div',
+            { className: 'tv-transferRow' },
+            h(Field, {
+              label: t('transfer.exportPassword'),
+              type: 'password',
+              autoComplete: 'new-password',
+              value: exportPassword,
+              placeholder: t('transfer.exportPasswordPlaceholder'),
+              onChange: (event) => setExportPassword(event.target.value),
+            }),
+            h('button', { type: 'button', className: 'tv-primary', disabled: busy, onClick: doExport }, busy ? t('transfer.exporting') : t('transfer.exportAction')),
+          ),
+          h('p', { className: 'tv-hint' }, t('transfer.plainWarning')),
+          h(
+            'div',
+            { className: 'tv-transferRow' },
+            h(
+              'label',
+              { className: 'tv-field' },
+              h('span', null, t('transfer.file')),
+              h('input', {
+                className: 'tv-file',
+                type: 'file',
+                accept: '.json,.tvault,application/json',
+                onChange: (event) => {
+                  const picked = event.target.files && event.target.files[0] ? event.target.files[0] : null
+                  setImportFile(picked)
+                  setTransfer(null)
+                },
+              }),
+              h('span', { className: 'tv-hint' }, importFile === null ? t('transfer.noFile') : importFile.name),
+            ),
+            h(Field, {
+              label: t('transfer.importPassword'),
+              type: 'password',
+              autoComplete: 'new-password',
+              value: importPassword,
+              placeholder: t('transfer.importPasswordPlaceholder'),
+              onChange: (event) => setImportPassword(event.target.value),
+            }),
+            h(
+              'label',
+              { className: 'tv-field' },
+              h('span', null, t('transfer.mode')),
+              h(
+                'select',
+                { className: 'tv-select', value: importMode, onChange: (event) => setImportMode(event.target.value) },
+                h('option', { value: 'merge' }, t('transfer.modeMerge')),
+                h('option', { value: 'overwrite' }, t('transfer.modeOverwrite')),
+              ),
+            ),
+            h('button', { type: 'button', className: 'tv-primary', disabled: busy || importFile === null, onClick: doImport }, busy ? t('transfer.importing') : t('transfer.importAction')),
+          ),
+          h('p', { className: 'tv-hint' }, t('transfer.hint')),
+          transfer === null ? null : h('p', { className: transfer.kind === 'error' ? 'tv-error' : 'tv-notice', role: 'status' }, transfer.text),
+        ),
         h(
           'div',
           { className: 'tv-usage' },
