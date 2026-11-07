@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "title": {
+    "en": "Token vault market",
+    "zh": "令牌库插件源"
+  },
+  "description": {
+    "en": "A plugin index for the DeepSeek Harness token-vault bundle.",
+    "zh": "令牌库插件的索引源。"
+  },
+  "metadata": {
+    "categories": {},
+    "labels": {},
+    "sortKeys": {}
+  },
+  "plugins": [
+    {
+      "name": "@local/token-vault",
+      "title": {
+        "en": "Token Vault",
+        "zh": "令牌库"
+      },
+      "description": {
+        "en": "Stores Git and other API tokens locally in a sidebar panel. Any session runs commands through vault_sh with the token exported as an environment variable, so the value never enters the session. Import/export included, with optional password encryption.",
+        "zh": "在侧栏面板里本机保存 Git 和其他 API 令牌；任意会话通过 vault_sh 把令牌注入子进程环境变量，令牌值不会进入会话。含导入/导出，导出可选密码加密。"
+      },
+      "icon": "https://raw.githubusercontent.com/ming-a1/token-vault/d0a80228177d3ffed9ee69dc7e43afe192be49fc/icon.svg",
+      "author": "ming-a1",
+      "homepage": "https://github.com/ming-a1/token-vault",
+      "repository": {
+        "url": "https://github.com/ming-a1/token-vault"
+      },
+      "metadata": {
+        "keywords": [
+          "token",
+          "secret",
+          "git",
+          "vault",
+          "environment"
+        ]
+      },
+      "versions": [
+        {
+          "version": "1.3.4",
+          "publishTimestamp": 1794020496,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/ming-a1/token-vault",
+            "commit": "d0a80228177d3ffed9ee69dc7e43afe192be49fc"
+          },
+          "engines": {}
+        }
+      ]
+    }
+  ]
+}
