@@ -183,20 +183,21 @@ window.__ModuleLoader__.load({
 .tv-notice{margin:0;color:var(--dsw-alias-state-success-primary);font-size:12px;line-height:18px}
 .tv-usage{display:flex;flex-direction:column;gap:6px;padding-top:12px;border-top:.5px solid var(--dsw-alias-border-l1)}
 .tv-usage p{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
-.tv-transfer{display:flex;flex-direction:column;gap:16px;padding-top:16px;border-top:.5px solid var(--dsw-alias-border-l1)}
-.tv-block{display:flex;flex-direction:column;gap:8px;min-width:0}
-.tv-blockTitle{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:20px}
+.tv-transfer{display:flex;flex-direction:column;gap:14px;padding-top:16px;border-top:.5px solid var(--dsw-alias-border-l1)}
+.tv-columns{display:flex;align-items:stretch;gap:20px;min-width:0}
+.tv-column{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:8px}
+.tv-column+.tv-column{border-left:.5px solid var(--dsw-alias-border-l1);padding-left:20px}
+.tv-column>.tv-primary{align-self:stretch;justify-content:center}
+.tv-columnTitle{color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;line-height:20px}
 .tv-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}
-.tv-line>.tv-input{flex:1 1 auto;min-width:0}
 .tv-inline{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:nowrap}
 .tv-fileName{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 .tv-secondary{box-sizing:border-box;height:32px;padding:0 14px;border:.5px solid var(--dsw-alias-border-l3);border-radius:8px;background:0 0;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;cursor:pointer;white-space:nowrap}
 .tv-secondary:hover{background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}
 .tv-secondary:disabled{opacity:.55;cursor:default}
-.tv-transfer .tv-primary{min-width:88px;justify-content:center}
-.tv-transfer .tv-select{width:110px;flex:0 0 auto}
-.tv-select{box-sizing:border-box;height:32px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px}
+.tv-select{box-sizing:border-box;height:32px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;flex:1 1 auto;min-width:0}
 .tv-hint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+@media (max-width:720px){.tv-columns{flex-direction:column;gap:16px}.tv-column+.tv-column{border-left:none;border-top:.5px solid var(--dsw-alias-border-l1);padding-left:0;padding-top:16px}}
 .tv-usage code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l1);border-radius:6px;padding:6px 8px;overflow-wrap:anywhere}
 `
 
@@ -580,11 +581,11 @@ window.__ModuleLoader__.load({
           h('p', { className: 'tv-lead' }, t('transfer.lead')),
           h(
             'div',
-            { className: 'tv-block' },
-            h('div', { className: 'tv-blockTitle' }, t('transfer.exportTitle')),
+            { className: 'tv-columns' },
             h(
               'div',
-              { className: 'tv-line' },
+              { className: 'tv-column' },
+              h('div', { className: 'tv-columnTitle' }, t('transfer.exportTitle')),
               h('input', {
                 className: 'tv-input',
                 type: 'password',
@@ -595,44 +596,40 @@ window.__ModuleLoader__.load({
                 onChange: (event) => setExportPassword(event.target.value),
               }),
               h('button', { type: 'button', className: 'tv-primary', disabled: busy, onClick: doExport }, busy ? t('transfer.exporting') : t('transfer.exportAction')),
+              h('p', { className: 'tv-hint' }, t('transfer.plainWarning')),
             ),
-            h('p', { className: 'tv-hint' }, t('transfer.plainWarning')),
-          ),
-          h(
-            'div',
-            { className: 'tv-block' },
-            h('div', { className: 'tv-blockTitle' }, t('transfer.importTitle')),
             h(
               'div',
-              { className: 'tv-line' },
-              h('input', {
-                ref: fileInput,
-                type: 'file',
-                accept: '.json,.tvault,application/json',
-                style: { display: 'none' },
-                onChange: (event) => {
-                  const picked = event.target.files && event.target.files[0] ? event.target.files[0] : null
-                  setImportFile(picked)
-                  setTransfer(null)
-                },
-              }),
+              { className: 'tv-column' },
+              h('div', { className: 'tv-columnTitle' }, t('transfer.importTitle')),
               h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'tv-secondary',
-                  disabled: busy,
-                  onClick: () => {
-                    if (fileInput.current !== null) fileInput.current.click()
+                'div',
+                { className: 'tv-line' },
+                h('input', {
+                  ref: fileInput,
+                  type: 'file',
+                  accept: '.json,.tvault,application/json',
+                  style: { display: 'none' },
+                  onChange: (event) => {
+                    const picked = event.target.files && event.target.files[0] ? event.target.files[0] : null
+                    setImportFile(picked)
+                    setTransfer(null)
                   },
-                },
-                t('transfer.pickFile'),
+                }),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'tv-secondary',
+                    disabled: busy,
+                    onClick: () => {
+                      if (fileInput.current !== null) fileInput.current.click()
+                    },
+                  },
+                  t('transfer.pickFile'),
+                ),
+                h('span', { className: 'tv-fileName' }, importFile === null ? t('transfer.noFile') : importFile.name),
               ),
-              h('span', { className: 'tv-fileName' }, importFile === null ? t('transfer.noFile') : importFile.name),
-            ),
-            h(
-              'div',
-              { className: 'tv-line' },
               h('input', {
                 className: 'tv-input',
                 type: 'password',
@@ -642,19 +639,24 @@ window.__ModuleLoader__.load({
                 placeholder: t('transfer.importPasswordPlaceholder'),
                 onChange: (event) => setImportPassword(event.target.value),
               }),
-              h('span', { className: 'tv-inline' }, t('transfer.mode')),
               h(
-                'select',
-                { className: 'tv-select', 'aria-label': t('transfer.mode'), value: importMode, onChange: (event) => setImportMode(event.target.value) },
-                h('option', { value: 'merge' }, t('transfer.modeMerge')),
-                h('option', { value: 'overwrite' }, t('transfer.modeOverwrite')),
+                'div',
+                { className: 'tv-line' },
+                h('span', { className: 'tv-inline' }, t('transfer.mode')),
+                h(
+                  'select',
+                  { className: 'tv-select', 'aria-label': t('transfer.mode'), value: importMode, onChange: (event) => setImportMode(event.target.value) },
+                  h('option', { value: 'merge' }, t('transfer.modeMerge')),
+                  h('option', { value: 'overwrite' }, t('transfer.modeOverwrite')),
+                ),
+                h('button', { type: 'button', className: 'tv-primary', disabled: busy || importFile === null, onClick: doImport }, busy ? t('transfer.importing') : t('transfer.importAction')),
               ),
-              h('button', { type: 'button', className: 'tv-primary', disabled: busy || importFile === null, onClick: doImport }, busy ? t('transfer.importing') : t('transfer.importAction')),
+              h('p', { className: 'tv-hint' }, t('transfer.hint')),
+              transfer === null ? null : h('p', { className: transfer.kind === 'error' ? 'tv-error' : 'tv-notice', role: 'status' }, transfer.text),
             ),
-            h('p', { className: 'tv-hint' }, t('transfer.hint')),
-            transfer === null ? null : h('p', { className: transfer.kind === 'error' ? 'tv-error' : 'tv-notice', role: 'status' }, transfer.text),
           ),
         ),
+
 
         h(
           'div',
