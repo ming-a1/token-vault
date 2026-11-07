@@ -12,7 +12,7 @@ window.__ModuleLoader__.load({
   id: '@local/token-vault',
   factory(require) {
     const React = require('react')
-    const { useCallback, useEffect, useState, useSyncExternalStore } = React
+    const { useCallback, useEffect, useRef, useState, useSyncExternalStore } = React
     const h = React.createElement
 
     const LOCALE_NS = 'token-vault'
@@ -183,7 +183,10 @@ window.__ModuleLoader__.load({
 .tv-transferRow{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
 .tv-transferRow .tv-field{flex:1 1 200px}
 .tv-transferAction{display:flex;gap:10px;align-items:flex-end;flex:0 0 auto}
-.tv-file{max-width:100%;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+.tv-fileName{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tv-secondary{box-sizing:border-box;height:32px;padding:0 14px;border:.5px solid var(--dsw-alias-border-l3);border-radius:8px;background:0 0;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;cursor:pointer;white-space:nowrap}
+.tv-secondary:hover{background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}
+.tv-secondary:disabled{opacity:.55;cursor:default}
 .tv-select{box-sizing:border-box;height:32px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px}
 .tv-hint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 .tv-usage code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border:.5px solid var(--dsw-alias-border-l1);border-radius:6px;padding:6px 8px;overflow-wrap:anywhere}
@@ -345,6 +348,7 @@ window.__ModuleLoader__.load({
       const [importMode, setImportMode] = useState('merge')
       const [importFile, setImportFile] = useState(null)
       const [transfer, setTransfer] = useState(null)
+      const fileInput = useRef(null)
 
       const refresh = useCallback(async () => {
         try {
@@ -477,6 +481,7 @@ window.__ModuleLoader__.load({
             mode: importMode,
           })
           setImportFile(null)
+          if (fileInput.current !== null) fileInput.current.value = ''
           setTransfer({
             kind: 'ok',
             text: t('transfer.imported', {
@@ -583,20 +588,33 @@ window.__ModuleLoader__.load({
             'div',
             { className: 'tv-transferRow' },
             h(
-              'label',
+              'div',
               { className: 'tv-field' },
               h('span', null, t('transfer.file')),
               h('input', {
-                className: 'tv-file',
+                ref: fileInput,
                 type: 'file',
                 accept: '.json,.tvault,application/json',
+                style: { display: 'none' },
                 onChange: (event) => {
                   const picked = event.target.files && event.target.files[0] ? event.target.files[0] : null
                   setImportFile(picked)
                   setTransfer(null)
                 },
               }),
-              h('span', { className: 'tv-hint' }, importFile === null ? t('transfer.noFile') : importFile.name),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'tv-secondary',
+                  disabled: busy,
+                  onClick: () => {
+                    if (fileInput.current !== null) fileInput.current.click()
+                  },
+                },
+                t('transfer.pickFile'),
+              ),
+              h('span', { className: 'tv-hint tv-fileName' }, importFile === null ? t('transfer.noFile') : importFile.name),
             ),
             h(Field, {
               label: t('transfer.importPassword'),
