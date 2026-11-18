@@ -1,9 +1,9 @@
 {
   "name": "@local/token-vault",
-  "version": "1.3.4",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Local token vault: store Git and other API tokens, use them from any session through placeholders without the value entering the session.",
+  "description": "Local token vault: store Git and other API tokens, use them from any session through environment variables without the value entering the session. Optional at-rest encryption, per-token enable/disable, usage audit, approval mode, health checks and an agent save-request flow.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ming-a1/token-vault.git"
