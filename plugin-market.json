@@ -21,10 +21,10 @@
         "zh": "令牌库"
       },
       "description": {
-        "en": "Stores Git and other API tokens locally in a sidebar panel. Any session runs commands through vault_sh with the token exported as an environment variable, so the value never enters the session. Import/export included, with optional password encryption.",
-        "zh": "在侧栏面板里本机保存 Git 和其他 API 令牌；任意会话通过 vault_sh 把令牌注入子进程环境变量，令牌值不会进入会话。含导入/导出，导出可选密码加密。"
+        "en": "Stores Git and other API tokens locally in a sidebar panel. Any session runs commands through vault_sh with the token exported as an environment variable, so the value never enters the session. Optional at-rest encryption, per-token enable/disable, usage audit, approval mode and import/export with password encryption.",
+        "zh": "在侧栏面板里本机保存 Git 和其他 API 令牌；任意会话通过 vault_sh 把令牌注入子进程环境变量，令牌值不会进入会话。可选落盘加密、令牌启停、使用审计、审批模式，以及带密码加密的导入/导出。"
       },
-      "icon": "https://raw.githubusercontent.com/ming-a1/token-vault/d0a80228177d3ffed9ee69dc7e43afe192be49fc/icon.svg",
+      "icon": "https://raw.githubusercontent.com/ming-a1/token-vault/cbe8e332b09329eb0083424baeffcf2dc5b2c8ef/icon.svg",
       "author": "ming-a1",
       "homepage": "https://github.com/ming-a1/token-vault",
       "repository": {
@@ -36,17 +36,18 @@
           "secret",
           "git",
           "vault",
-          "environment"
+          "environment",
+          "encryption"
         ]
       },
       "versions": [
         {
-          "version": "1.3.4",
-          "publishTimestamp": 1794020496,
+          "version": "2.0.0",
+          "publishTimestamp": 1794990697,
           "source": {
             "type": "git",
             "url": "https://github.com/ming-a1/token-vault",
-            "commit": "d0a80228177d3ffed9ee69dc7e43afe192be49fc"
+            "commit": "cbe8e332b09329eb0083424baeffcf2dc5b2c8ef"
           },
           "engines": {}
         }
