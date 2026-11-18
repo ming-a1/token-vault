@@ -15,7 +15,7 @@
   },
   "plugins": [
     {
-      "name": "@local/token-vault",
+      "name": "@lls-a1/token-vault",
       "title": {
         "en": "Token Vault",
         "zh": "令牌库"

@@ -25,7 +25,7 @@
  * Storage can stay plaintext (a `0600` JSON document) or be encrypted at rest
  * with a master password (scrypt + AES-256-GCM, one unlock per Host boot).
  *
- * @module @local/token-vault
+ * @module @lls-a1/token-vault
  */
 
 import {

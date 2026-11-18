@@ -10,11 +10,11 @@
  * confirmations (agent save requests and vault_sh command approvals), a
  * `.env` bulk import, per-token health checks and search.
  *
- * @module @local/token-vault/client
+ * @module @lls-a1/token-vault/client
  */
 
 window.__ModuleLoader__.load({
-  id: '@local/token-vault',
+  id: '@lls-a1/token-vault',
   factory(require) {
     const React = require('react')
     const { useCallback, useEffect, useRef, useState, useSyncExternalStore } = React
