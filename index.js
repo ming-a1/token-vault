@@ -166,6 +166,7 @@ const DEFAULT_CHECK_HEADER = `Authorization: Bearer $${CHECK_ENV}`
 const DEFAULT_CHECKS = [
   { pattern: /GITHUB/i, url: 'https://api.github.com/user', header: DEFAULT_CHECK_HEADER },
   { pattern: /GITLAB/i, url: 'https://gitlab.com/api/v4/user', header: DEFAULT_CHECK_HEADER },
+  { pattern: /NPM/i, url: 'https://registry.npmjs.org/-/whoami', header: DEFAULT_CHECK_HEADER },
   { pattern: /(HUGGINGFACE|HF)_TOKEN/i, url: 'https://huggingface.co/api/whoami-v2', header: DEFAULT_CHECK_HEADER },
   { pattern: /SLACK_TOKEN/i, url: 'https://slack.com/api/auth.test', header: DEFAULT_CHECK_HEADER },
   { pattern: /CLOUDFLARE/i, url: 'https://api.cloudflare.com/client/v4/user/tokens/verify', header: `Authorization: Bearer $${CHECK_ENV}` },
@@ -1894,7 +1895,7 @@ export function apply(ctx, config = {}) {
       // panel's test button works before the user configures anything.
       const fallback = defaultCheck(tokenName)
       if (fallback === undefined) {
-        throw new VaultError(`没有给「${tokenName}」设置检查 URL —— 请先在面板里设置（GitHub、GitLab、Hugging Face、Slack、Cloudflare 这类令牌名有内置默认值）`)
+        throw new VaultError(`没有给「${tokenName}」设置检查 URL —— 请先在面板里设置（GitHub、GitLab、npm、Hugging Face、Slack、Cloudflare 这类令牌名有内置默认值）`)
       }
       url = fallback.url
       header = fallback.header
