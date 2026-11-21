@@ -24,7 +24,7 @@
         "en": "Stores Git and other API tokens locally in a sidebar panel. Any session runs commands through vault_sh with the token exported as an environment variable, so the value never enters the session. Optional at-rest encryption, per-token enable/disable, usage audit, approval mode and import/export with password encryption.",
         "zh": "在侧栏面板里本机保存 Git 和其他 API 令牌；任意会话通过 vault_sh 把令牌注入子进程环境变量，令牌值不会进入会话。可选落盘加密、令牌启停、使用审计、审批模式，以及带密码加密的导入/导出。"
       },
-      "icon": "https://raw.githubusercontent.com/ming-a1/token-vault/7c6f3c294d3bdd28c072c5ca59b0869054f45d07/icon.svg",
+      "icon": "https://raw.githubusercontent.com/ming-a1/token-vault/718ef31ad444b0591b85f9a40f25ef1c67258eab/icon.svg",
       "author": "ming-a1",
       "homepage": "https://github.com/ming-a1/token-vault",
       "repository": {
@@ -42,12 +42,12 @@
       },
       "versions": [
         {
-          "version": "2.0.4",
-          "publishTimestamp": 1795081715,
+          "version": "2.0.5",
+          "publishTimestamp": 1795253705,
           "source": {
             "type": "git",
             "url": "https://github.com/ming-a1/token-vault",
-            "commit": "7c6f3c294d3bdd28c072c5ca59b0869054f45d07"
+            "commit": "718ef31ad444b0591b85f9a40f25ef1c67258eab"
           },
           "engines": {}
         }
