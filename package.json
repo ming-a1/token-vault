@@ -1,6 +1,6 @@
 {
   "name": "@lls-a1/token-vault",
-  "version": "2.0.4",
+  "version": "2.0.5",
   "type": "module",
   "description": "Local token vault: store Git and other API tokens, use them from any session through environment variables without the value entering the session. Optional at-rest encryption, per-token enable/disable, usage audit, approval mode, health checks and an agent save-request flow.",
   "repository": {

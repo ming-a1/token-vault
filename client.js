@@ -576,10 +576,20 @@ window.__ModuleLoader__.load({
 
     /** One JSON route call; a non-2xx answer keeps the Host's own message. */
     async function call(route, body) {
+      let serialized
+      if (body !== undefined) {
+        try {
+          serialized = JSON.stringify(body)
+        } catch (error) {
+          // A DOM node (and its React fiber back-reference) is circular; name the
+          // route instead of surfacing V8's "Converting circular structure" stack.
+          throw new Error(`请求「${route}」的数据无法序列化：内部错误（${error.message}）`)
+        }
+      }
       const init =
         body === undefined
           ? { method: 'GET' }
-          : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
+          : { method: 'POST', headers: { 'content-type': 'application/json' }, body: serialized }
       const response = await fetch(route, init)
       let payload = {}
       try {
@@ -1504,7 +1514,7 @@ window.__ModuleLoader__.load({
             autoComplete: 'new-password',
             value: draft.value,
             placeholder: t('field.valuePlaceholder'),
-            onChange: onDraftValue,
+            onChange: (event) => onDraftValue(event.target.value),
           }),
           h(Field, {
             label: t('field.note'),
