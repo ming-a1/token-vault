@@ -39,6 +39,7 @@ window.__ModuleLoader__.load({
     const HISTORY_CLEAR_ROUTE = 'token-vault/history/clear'
     const HISTORY_DELETE_ROUTE = 'token-vault/history/delete'
     const RESOLVE_ROUTE = 'token-vault/resolve'
+    const REVOKE_GRANT_ROUTE = 'token-vault/revoke-grant'
     const CHECK_ROUTE = 'token-vault/check'
     const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/
     const EXPORT_CONFIRMATION = 'EXPORT'
@@ -195,6 +196,16 @@ window.__ModuleLoader__.load({
         'security.changeHint': 'Enter the current password on the left and the new one here.',
         'security.approvalHint': 'Ask me before any command uses a token',
         'security.approvalUIHint': 'Where the approval appears',
+        'security.grantMinutes': 'Approval lasts',
+        'security.grantMinutesHint': 'Approved tokens keep working in that session for this long',
+        'security.grantOff': 'Ask every command',
+        'security.grantMinutesValue': '{minutes} min',
+        'security.grantsTitle': 'Active approvals',
+        'security.grantNone': 'No active approval.',
+        'security.grantRow': '{tokens} · {minutes} min left',
+        'security.grantRevoke': 'Revoke',
+        'security.grantRevokeAll': 'Revoke all',
+        'security.grantRevoked': 'Approval revoked.',
         'security.auditHint': 'Log each use (token names and commands, never values)',
         'security.notifyHint': 'Browser notification when a confirmation is waiting',
         'security.soundHint': 'Short beep when a confirmation arrives',
@@ -370,6 +381,16 @@ window.__ModuleLoader__.load({
         'security.changeHint': '左边填当前主密码，右边填新主密码，点「确认更换」。',
         'security.approvalHint': '命令要用令牌之前先问我',
         'security.approvalUIHint': '审批提示出现在哪里',
+        'security.grantMinutes': '审批有效期',
+        'security.grantMinutesHint': '批准后这些令牌在该会话内可继续使用，不必重复批准',
+        'security.grantOff': '每次都要批准',
+        'security.grantMinutesValue': '{minutes} 分钟',
+        'security.grantsTitle': '有效授权',
+        'security.grantNone': '当前没有有效授权。',
+        'security.grantRow': '{tokens} · 剩 {minutes} 分钟',
+        'security.grantRevoke': '撤销',
+        'security.grantRevokeAll': '全部撤销',
+        'security.grantRevoked': '已撤销授权。',
         'security.auditHint': '记录每次使用（只记令牌名和命令，不记值）',
         'security.notifyHint': '有待确认事项时弹浏览器通知',
         'security.soundHint': '有待确认事项时响一声',
@@ -538,6 +559,10 @@ window.__ModuleLoader__.load({
 .tv-secondary:disabled{opacity:.55;cursor:default}
 .tv-select{box-sizing:border-box;height:32px;padding:0 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:8px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;flex:1 1 auto;min-width:0}
 .tv-hint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:19px}
+.tv-grants{display:flex;flex-direction:column;gap:6px;padding:2px 0 8px}
+.tv-grantsHead{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.tv-grantRow{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+.tv-grantText{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:720px){.tv-columns{flex-direction:column;gap:16px}.tv-column+.tv-column{border-left:none;border-top:.5px solid var(--dsw-alias-border-l1);padding-left:0;padding-top:16px}}
 `
 
@@ -1064,6 +1089,7 @@ window.__ModuleLoader__.load({
       const locked = state?.locked === true
       const encrypted = state?.encrypted === true
       const settings = state?.settings ?? { requireApproval: false, audit: true }
+      const grants = state?.grants ?? []
       const backupPath = state?.backupPath ?? ''
       // Feedback is floating (toasts); these helpers keep the call sites terse.
       const showError = (text) => { if (text !== '') pushToast('error', String(text)) }
@@ -1426,6 +1452,11 @@ window.__ModuleLoader__.load({
 
       const updateSetting = (field, value) =>
         quietRun(() => call(SETTINGS_ROUTE, { [field]: value }))
+
+      const revokeGrant = (session) =>
+        run(() => call(REVOKE_GRANT_ROUTE, session === undefined ? {} : { session }), {
+          notices: () => t('security.grantRevoked'),
+        })
 
       const filtered = (tokens ?? []).filter((token) => {
         if (search.trim() === '') return true
@@ -1831,6 +1862,55 @@ window.__ModuleLoader__.load({
                   h('option', { value: 'session' }, t('security.approvalUISession')),
                   h('option', { value: 'panel' }, t('security.approvalUIPanel')),
                 ))
+              : null,
+            settings.requireApproval === true && !locked
+              ? h(SettingRow, {
+                  label: t('security.grantMinutes'),
+                  hint: t('security.grantMinutesHint'),
+                }, h(
+                  'select',
+                  {
+                    className: 'tv-select',
+                    style: { width: 132 },
+                    'aria-label': t('security.grantMinutes'),
+                    value: String(settings.approvalGrantMinutes ?? 10),
+                    onChange: (event) => updateSetting('approvalGrantMinutes', Number(event.target.value)),
+                  },
+                  [0, 1, 5, 10, 30, 60].map((minutes) =>
+                    h('option', { key: minutes, value: String(minutes) },
+                      minutes === 0 ? t('security.grantOff') : t('security.grantMinutesValue', { minutes })),
+                  ),
+                ))
+              : null,
+            settings.requireApproval === true && !locked
+              ? h('div', { className: 'tv-grants' },
+                  h('div', { className: 'tv-grantsHead' },
+                    h('span', { className: 'tv-settingLabel' }, t('security.grantsTitle')),
+                    grants.length === 0 ? null : h('button', {
+                      type: 'button',
+                      className: 'tv-link',
+                      disabled: busy,
+                      onClick: () => revokeGrant(undefined),
+                    }, t('security.grantRevokeAll')),
+                  ),
+                  grants.length === 0
+                    ? h('p', { className: 'tv-hint' }, t('security.grantNone'))
+                    : grants.map((grant) =>
+                        h('div', { key: grant.session, className: 'tv-grantRow' },
+                          h('span', { className: 'tv-grantText' },
+                            t('security.grantRow', {
+                              tokens: grant.tokens.join('、'),
+                              minutes: Math.max(1, Math.ceil((grant.remainingMs ?? 0) / 60000)),
+                            })),
+                          h('button', {
+                            type: 'button',
+                            className: 'tv-link',
+                            disabled: busy,
+                            onClick: () => revokeGrant(grant.session),
+                          }, t('security.grantRevoke')),
+                        ),
+                      ),
+                )
               : null,
             h(SettingRow, {
               label: t('security.audit'),

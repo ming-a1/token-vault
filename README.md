@@ -8,7 +8,8 @@ DeepSeek Harness 的本机令牌管理插件。在侧栏「令牌库」面板保
 - **`vault_sh`**：命令里只写 `$GITHUB_TOKEN`；`tokens: ["GITHUB_TOKEN"]` 可只导出点名的令牌
 - **输出洗值**：工具输出里的令牌值（含 URL 编码、base64、hex、JSON 转义）会被替换回 `{{token:名称}}`
 - **落盘加密**（可选）：主密码 + scrypt + AES-256-GCM，Host 重启后上锁
-- **审计 / 审批**（可选）：记录谁在哪个会话用了哪个令牌；审批模式下每次 `vault_sh` 先等你确认
+- **审计 / 审批**（可选）：记录谁在哪个会话用了哪个令牌
+- **审批有效期**：批准一次后，这些令牌在该会话内可复用（默认 10 分钟，可设为每次都要批准），面板里可随时撤销
 - **健康检查 / 有效期**：GitHub、GitLab、npm、Hugging Face、Slack、Cloudflare 有内置端点
 - **导入 / 导出**：`.json`、加密 `.tvault`、`.env`
 - **agent 权限受限**：只能 `list` 和 `request-save`（值由你在面板粘贴）

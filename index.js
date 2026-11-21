@@ -112,6 +112,12 @@ const RESERVED_ENV_NAMES = new Set([
 /** Most confirmations held in memory at once. */
 const MAX_PENDING = 100
 
+/** Selectable approval-grant lifetimes, in minutes (0 = ask every command). */
+const APPROVAL_GRANT_CHOICES = new Set([0, 1, 5, 10, 30, 60])
+
+/** Default lifetime of one approval: covers the turn that was approved. */
+const DEFAULT_APPROVAL_GRANT_MINUTES = 10
+
 /** The typed confirmation a plain (unencrypted) export requires. */
 const EXPORT_CONFIRMATION = 'EXPORT'
 
@@ -144,6 +150,7 @@ const HISTORY_PATH = '/token-vault/history'
 const HISTORY_CLEAR_PATH = '/token-vault/history/clear'
 const HISTORY_DELETE_PATH = '/token-vault/history/delete'
 const RESOLVE_PATH = '/token-vault/resolve'
+const REVOKE_GRANT_PATH = '/token-vault/revoke-grant'
 const CHECK_PATH = '/token-vault/check'
 
 /** The shell tool: the only way a token reaches a command. */
@@ -317,7 +324,7 @@ function normalizeEntry(name, raw, now) {
 
 /** Default settings for a fresh or legacy vault. */
 function defaultSettings() {
-  return { requireApproval: false, audit: true, approvalUI: 'session' }
+  return { requireApproval: false, audit: true, approvalUI: 'session', approvalGrantMinutes: DEFAULT_APPROVAL_GRANT_MINUTES }
 }
 
 /** Sanitize settings read from a document. */
@@ -327,6 +334,7 @@ function normalizeSettings(raw) {
     if (typeof raw.requireApproval === 'boolean') base.requireApproval = raw.requireApproval
     if (typeof raw.audit === 'boolean') base.audit = raw.audit
     if (raw.approvalUI === 'session' || raw.approvalUI === 'panel') base.approvalUI = raw.approvalUI
+    if (APPROVAL_GRANT_CHOICES.has(raw.approvalGrantMinutes)) base.approvalGrantMinutes = raw.approvalGrantMinutes
   }
   return base
 }
@@ -524,11 +532,11 @@ function tokenLabel(tokenName) {
  * @returns the human-readable summary text.
  */
 function approvalBrief(payload) {
-  const parts = ['当前轮次调用需要使用下你的令牌。']
+  const parts = ['这次调用需要使用你的令牌。']
   const tokens = payload.tokens ?? []
   if (tokens.length > 0) {
     const names = tokens.map(tokenLabel)
-    parts.push(`会用到：${names.length > 3 ? `${names.slice(0, 3).join('、')} 等 ${names.length} 个` : names.join('、')}。`)
+    parts.push(`可用：${names.length > 3 ? `${names.slice(0, 3).join('、')} 等 ${names.length} 个` : names.join('、')}。`)
   }
   // Only show the agent's own description when it is in the user's language:
   // an English-only line (the tool's default habit before 1.6.1) is noise on a
@@ -536,7 +544,10 @@ function approvalBrief(payload) {
   // visible in the panel and the audit log.
   const description = (payload.description ?? '').trim()
   if (description !== '' && /[\u4e00-\u9fff]/.test(description)) parts.push(`要做什么：${description}`)
-  parts.push('批准后这条命令才会执行。令牌只临时给它用，聊天记录里看不到。')
+  const minutes = typeof payload.grantMinutes === 'number' ? payload.grantMinutes : 0
+  parts.push(minutes > 0
+    ? `批准后这条命令才会执行；这些令牌在 ${minutes} 分钟内对本会话的后续命令同样有效，不用重复批准。聊天记录里看不到令牌值。`
+    : '批准后这条命令才会执行。令牌只临时给它用，聊天记录里看不到。')
   return parts.join('\n')
 }
 
@@ -1346,12 +1357,81 @@ export function apply(ctx, config = {}) {
       encrypted: vault.encrypted,
       locked: vault.locked,
       backupPath: backupExists ? backupPath : undefined,
-      settings: { requireApproval: vault.settings.requireApproval, audit: vault.settings.audit, approvalUI: vault.settings.approvalUI },
+      settings: {
+        requireApproval: vault.settings.requireApproval,
+        audit: vault.settings.audit,
+        approvalUI: vault.settings.approvalUI,
+        approvalGrantMinutes: vault.settings.approvalGrantMinutes,
+      },
+      grants: grantsPayload(),
     }
   }
 
   /** Pending user confirmations: agent save requests and vault_sh approvals. */
   const pendings = new Map()
+
+  /**
+   * Approval grants, one per session: an approval of a `vault_sh` call also
+   * covers that session's later calls while every token they need is inside
+   * the granted set and the grant has not expired. The card promises exactly
+   * this ("这些令牌在 N 分钟内对本会话的后续命令同样有效"), so a turn that
+   * needs two commands stops asking twice.
+   */
+  const approvalGrants = new Map()
+
+  /** The live grant for one session, dropping an expired one. */
+  const grantFor = (sessionId) => {
+    const grant = approvalGrants.get(sessionId)
+    if (grant === undefined) return undefined
+    if (Date.now() >= grant.expiresAt) {
+      approvalGrants.delete(sessionId)
+      return undefined
+    }
+    return grant
+  }
+
+  /** Whether the session's grant already covers every one of these tokens. */
+  const grantCovers = (sessionId, names) => {
+    const grant = grantFor(sessionId)
+    if (grant === undefined) return false
+    return names.every((name) => grant.tokens.includes(name))
+  }
+
+  /** Record (or extend) one session's grant; no-op when grants are disabled. */
+  const rememberGrant = (sessionId, names, sessionTitle) => {
+    const minutes = vault.settings.approvalGrantMinutes ?? DEFAULT_APPROVAL_GRANT_MINUTES
+    if (!(minutes > 0) || names.length === 0) return undefined
+    const previous = grantFor(sessionId)
+    const tokens = previous === undefined ? [...names] : [...new Set([...previous.tokens, ...names])]
+    const grant = {
+      session: sessionId,
+      sessionTitle: sessionTitle ?? previous?.sessionTitle,
+      tokens,
+      expiresAt: Date.now() + minutes * 60_000,
+    }
+    approvalGrants.set(sessionId, grant)
+    return grant
+  }
+
+  /** The grants the panel may show, expired ones dropped. */
+  const grantsPayload = () => {
+    const now = Date.now()
+    const rows = []
+    for (const [sessionId, grant] of approvalGrants) {
+      if (now >= grant.expiresAt) {
+        approvalGrants.delete(sessionId)
+        continue
+      }
+      rows.push({
+        session: sessionId,
+        ...grant.sessionTitle === undefined ? {} : { sessionTitle: grant.sessionTitle },
+        tokens: grant.tokens,
+        expiresAt: new Date(grant.expiresAt).toISOString(),
+        remainingMs: grant.expiresAt - now,
+      })
+    }
+    return rows.sort((left, right) => left.remainingMs - right.remainingMs)
+  }
 
   /** Recent approval outcomes, newest first, for the panel's history view. */
   const approvalHistory = []
@@ -1722,6 +1802,18 @@ export function apply(ctx, config = {}) {
       vault.settings.approvalUI = body.approvalUI
       changed = true
     }
+    if (body.approvalGrantMinutes !== undefined) {
+      const minutes = Number(body.approvalGrantMinutes)
+      if (!APPROVAL_GRANT_CHOICES.has(minutes)) {
+        throw new VaultError(`审批有效期只能是 ${[...APPROVAL_GRANT_CHOICES].join('、')} 分钟`)
+      }
+      vault.settings.approvalGrantMinutes = minutes
+      changed = true
+    }
+    // Turning approval off (or the grant off) must also drop what was granted.
+    if (vault.settings.requireApproval !== true || !(vault.settings.approvalGrantMinutes > 0)) {
+      approvalGrants.clear()
+    }
     if (changed) await vault.flush()
     return listPayload()
   })
@@ -1740,6 +1832,14 @@ export function apply(ctx, config = {}) {
     return listPayload()
   })
 
+  // POST revoke-grant: drop one session's approval grant, or every grant.
+  route(REVOKE_GRANT_PATH, `token-vault: POST ${REVOKE_GRANT_PATH}`, async (body) => {
+    await vault.ready()
+    if (typeof body.session === 'string' && body.session !== '') approvalGrants.delete(body.session)
+    else approvalGrants.clear()
+    return { grants: grantsPayload() }
+  })
+
   // POST unlock: open an encrypted vault for this Host boot.
   route(UNLOCK_PATH, `token-vault: POST ${UNLOCK_PATH}`, async (body) => {
     await vault.unlock(typeof body.password === 'string' ? body.password : '')
@@ -1749,6 +1849,7 @@ export function apply(ctx, config = {}) {
   // POST lock: forget values and the key until the next unlock.
   route(LOCK_PATH, `token-vault: POST ${LOCK_PATH}`, async () => {
     await vault.ready()
+    approvalGrants.clear()
     vault.lock()
     return listPayload()
   })
@@ -1846,9 +1947,11 @@ export function apply(ctx, config = {}) {
     if (entry.type === 'sh') {
       if (decision === 'approve') {
         recordApproval('approved', 'panel', entry.payload)
+        rememberGrant(entry.payload.session, entry.payload.tokens ?? [], entry.payload.sessionTitle)
         entry.approve()
         return { resolved: id }
       }
+      approvalGrants.delete(entry.payload.session)
       recordApproval('denied', 'panel', entry.payload)
       entry.deny('你在令牌库面板里拒绝了这条命令，命令没有执行')
       return { resolved: id }
@@ -2286,54 +2389,73 @@ export function apply(ctx, config = {}) {
           // panel-mode choice. Save requests always stay on the panel because
           // a pasted value must never travel through a logged answer.
           if (vault.settings.requireApproval === true) {
+            const grantMinutes = vault.settings.approvalGrantMinutes ?? DEFAULT_APPROVAL_GRANT_MINUTES
+            const approvalNames = exports.map((entry) => entry.name)
             const sessionTitle = await sessionTitleFor(sessionId)
-            const approvalPayload = {
-              description: args.description ?? '',
-              command: args.command,
-              tokens: exports.map((entry) => entry.name),
-              sessionTitle,
-              session: sessionId,
-            }
-            const questionsService = exec.agent === undefined ? undefined : ctx.get('userQuestions')
-            if (vault.settings.approvalUI === 'session' && questionsService !== undefined && typeof questionsService.ask === 'function') {
-              let result
-              try {
-                result = await questionsService.ask({
-                questions: [{
-                  id: 'vault-sh-approval',
-                  question: approvalBrief(approvalPayload),
-                  header: '可以用一下你的令牌吗？',
-                  options: [
-                    { label: '可以用', description: '把令牌临时借给这条命令，然后执行' },
-                    { label: '不行', description: '这条命令不执行，调用直接失败' },
-                  ],
-                }],
-                agent: exec.agent,
-                signal: exec.signal,
-                ...(exec.callId === undefined ? {} : { wait: { callId: exec.callId } }),
-                })
-              } catch (askError) {
-                // The call died before an answer arrived (aborted, or the
-                // question service failed) — record it as an aborted approval.
-                recordApproval('aborted', 'session', approvalPayload)
-                throw askError
-              }
-              const approved = Array.isArray(result?.answers) && result.answers.some((answer) => answer.id === 'vault-sh-approval' && Array.isArray(answer.selected) && (answer.selected[0] === '可以用' || answer.selected[0] === '批准'))
-              recordApproval(approved ? 'approved' : 'denied', 'session', approvalPayload)
-              // An empty selected is an explicit skip — never treated as permission.
+            // An earlier approval in this session already covers these tokens:
+            // run without asking again, and say so in the audit log.
+            if (grantCovers(sessionId, approvalNames)) {
               await vault.audit({
                 kind: 'sh-approval',
                 session: sessionId,
-                ui: 'session',
-                decision: approved ? 'approved' : 'denied',
+                ui: 'grant',
+                decision: 'reused',
+                tokens: approvalNames,
                 description: args.description ?? '',
                 command: args.command,
               })
-              if (!approved) {
-                throw new VaultError('你在审批卡片里拒绝了或跳过了这条命令，命令没有执行')
-              }
             } else {
-              await awaitApproval(approvalPayload, exec.signal)
+              const approvalPayload = {
+                description: args.description ?? '',
+                command: args.command,
+                tokens: approvalNames,
+                sessionTitle,
+                session: sessionId,
+                grantMinutes,
+              }
+              const questionsService = exec.agent === undefined ? undefined : ctx.get('userQuestions')
+              if (vault.settings.approvalUI === 'session' && questionsService !== undefined && typeof questionsService.ask === 'function') {
+                let result
+                try {
+                  result = await questionsService.ask({
+                    questions: [{
+                      id: 'vault-sh-approval',
+                      question: approvalBrief(approvalPayload),
+                      header: '可以用一下你的令牌吗？',
+                      options: [
+                        { label: '可以用', description: '把令牌临时借给这条命令，然后执行' },
+                        { label: '不行', description: '这条命令不执行，调用直接失败' },
+                      ],
+                    }],
+                    agent: exec.agent,
+                    signal: exec.signal,
+                    ...(exec.callId === undefined ? {} : { wait: { callId: exec.callId } }),
+                  })
+                } catch (askError) {
+                  // The call died before an answer arrived (aborted, or the
+                  // question service failed) — record it as an aborted approval.
+                  recordApproval('aborted', 'session', approvalPayload)
+                  throw askError
+                }
+                const approved = Array.isArray(result?.answers) && result.answers.some((answer) => answer.id === 'vault-sh-approval' && Array.isArray(answer.selected) && (answer.selected[0] === '可以用' || answer.selected[0] === '批准'))
+                recordApproval(approved ? 'approved' : 'denied', 'session', approvalPayload)
+                // An empty selected is an explicit skip — never treated as permission.
+                await vault.audit({
+                  kind: 'sh-approval',
+                  session: sessionId,
+                  ui: 'session',
+                  decision: approved ? 'approved' : 'denied',
+                  description: args.description ?? '',
+                  command: args.command,
+                })
+                if (!approved) {
+                  approvalGrants.delete(sessionId)
+                  throw new VaultError('你在审批卡片里拒绝了或跳过了这条命令，命令没有执行')
+                }
+              } else {
+                await awaitApproval(approvalPayload, exec.signal)
+              }
+              rememberGrant(sessionId, approvalNames, sessionTitle)
             }
           }
 
